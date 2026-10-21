@@ -87,6 +87,8 @@ data class SpeechSettings(
     val autoSendSilenceMs: Int = DEFAULT_AUTO_SEND_SILENCE_MS,
     /** 识别结果交付前使用当前对话模型保守纠错。 */
     val refineTranscript: Boolean = false,
+    /** 只控制 Eta 自身的语音输入，关闭时保留服务配置以便再次开启。 */
+    val recognitionEnabled: Boolean = true,
 ) {
     companion object {
         const val DEFAULT_AUTO_SEND_SILENCE_MS = 2_000

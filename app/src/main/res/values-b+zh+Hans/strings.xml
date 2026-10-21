@@ -1407,4 +1407,8 @@
   <string name="speech_voice_minimax_elite">精英青年</string>
   <string name="speech_voice_minimax_executive">沉稳高管</string>
   <string name="speech_voice_minimax_news">新闻女声</string>
+  <string name="speech_recognition_enabled">启用语音识别</string>
+  <string name="speech_recognition_enabled_summary">使用 Eta 的系统或云端语音输入</string>
+  <string name="speech_recognition_disabled">已关闭</string>
+  <string name="speech_recognition_disabled_note">保存后隐藏聊天和助手浮窗中的麦克风入口。全局唤醒会在入场动画结束后打开文字输入和键盘，可使用输入法自带的语音输入。原服务配置会保留。</string>
 </resources>

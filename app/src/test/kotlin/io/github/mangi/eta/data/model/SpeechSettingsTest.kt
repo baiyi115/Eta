@@ -14,6 +14,7 @@ class SpeechSettingsTest {
         assertEquals(AsrProvider.SYSTEM, config.asr)
         assertEquals(TtsProvider.NONE, config.tts)
         assertFalse(config.autoSpeak)
+        assertTrue(config.recognitionEnabled)
         validateSpeechSettings(config, SpeechCredentials(), synthesis = false)
     }
 
@@ -93,6 +94,19 @@ class SpeechSettingsTest {
         assertThrows(SpeechFailure::class.java) {
             validateSpeechSettings(SpeechSettings(tts = TtsProvider.GEMINI,
                 geminiTts = GeminiTtsConfig(style = "字".repeat(501))), secrets, true)
+        }
+    }
+
+    @Test fun disablingRecognitionPreservesProviderConfigurationAndPlayback() {
+        val original = SpeechSettings(asr = AsrProvider.QWEN_FILE, tts = TtsProvider.GEMINI,
+            language = "zh", refineTranscript = true, autoSpeak = true)
+        val disabled = original.copy(recognitionEnabled = false)
+        val restored = json.decodeFromString<SpeechSettings>(json.encodeToString(disabled))
+        assertFalse(restored.recognitionEnabled)
+        assertEquals(original, restored.copy(recognitionEnabled = true))
+        validateSpeechSettings(restored, SpeechCredentials(), synthesis = false)
+        assertThrows(SpeechFailure::class.java) {
+            validateSpeechSettings(restored, SpeechCredentials(), synthesis = true)
         }
     }
 }

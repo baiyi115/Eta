@@ -25,6 +25,7 @@ internal fun Throwable.speechFailure(): SpeechFailure = when (this) {
 }
 
 internal fun validateSpeechSettings(settings: SpeechSettings, secrets: SpeechCredentials, synthesis: Boolean) {
+    if (!synthesis && !settings.recognitionEnabled) return
     fun required(value: String, name: String) {
         if (value.isBlank()) throw SpeechFailure(SpeechErrorCode.CONFIGURATION, "请先配置$name")
     }
