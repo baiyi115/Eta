@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="tool_phone_use">前台手机操作</string>
+    <string name="tool_background_phone_use">后台手机操作</string>
+    <string name="tool_phone_use_description">通过截图逐步操作手机，带有会话、观察校验和动作预算。</string>
+    <string name="tool_background_phone_use_description">操作独立虚拟屏，需要 Root 和兼容的屏幕与输入隔离支持。</string>
+    <string name="chat_reply_screenshot">截图 %1$d</string>
+    <string name="chat_reply_image_loading">正在加载截图…</string>
+    <string name="chat_reply_image_zoom">双指或双击缩放图片</string>
+    <string name="chat_reply_image_failed">无法加载截图</string>
+    <string name="phone_use_confirmation_title">Eta · 确认手机操作</string>
+    <string name="phone_use_confirmation_preview">待核对的截图</string>
+    <string name="phone_use_confirmation_allow">允许这一步</string>
+    <string name="phone_use_confirmation_cancel">取消并停止</string>
+</resources>

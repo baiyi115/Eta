@@ -68,6 +68,7 @@ class AgentAccessibilityService : AccessibilityService() {
     )
 
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val phoneUseConfirmation = PhoneUseConfirmationHost(this)
     private val screenshotExecutor: ExecutorService = SCREENSHOT_EXECUTOR
     private val windowChangeLock = ReentrantLock()
     private val windowChanged = windowChangeLock.newCondition()
@@ -93,8 +94,10 @@ class AgentAccessibilityService : AccessibilityService() {
     )
     private val windowContentGenerations = mutableMapOf<Int, Long>()
     private val serviceToken = SERVICE_TOKENS.incrementAndGet()
+    private val phoneUseNodeSources = PhoneUseNodeSources<AccessibilityNodeInfo>("$serviceToken", { AccessibilityNodeInfo.obtain(it) })
 
     override fun onServiceConnected() {
+        phoneUseConfirmation.activate()
         instance = this
     }
 
@@ -110,6 +113,8 @@ class AgentAccessibilityService : AccessibilityService() {
     }
 
     private fun clearCurrentInstance() {
+        phoneUseConfirmation.close()
+        phoneUseNodeSources.clear()
         if (instance === this) instance = null
         scrollEventObservationGate.clear()
         signalWindowChanged()
@@ -120,6 +125,7 @@ class AgentAccessibilityService : AccessibilityService() {
             AccessibilityEvent.TYPE_WINDOWS_CHANGED,
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
                 pruneWindowContentGenerations()
+                prunePhoneUseNodeSources()
                 signalWindowChanged()
             }
             AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
@@ -133,7 +139,7 @@ class AgentAccessibilityService : AccessibilityService() {
         }
     }
 
-    override fun onInterrupt() = Unit
+    override fun onInterrupt() { phoneUseConfirmation.cancelPending() }
 
     /**
      * 一次观察与其节点句柄组成不可变快照。调用方必须把同一实例传回节点动作，
@@ -173,6 +179,236 @@ class AgentAccessibilityService : AccessibilityService() {
             }
         }
     }
+
+    data class PhoneUseDisplaySnapshot(
+        val nodes: List<UiNode>,
+        val truncated: Boolean,
+        val unobservedRegions: List<Rect> = emptyList(),
+        val windowId: Int = -1,
+        val sourceIds: List<String> = emptyList(),
+    )
+
+    /** Bounded breadth-first observation; unknown subtrees retain their bounds as non-actionable regions. */
+    fun captureDisplayNodes(displayId: Int, expectedPackage: String): PhoneUseDisplaySnapshot? = runOnMainSync {
+        val root = phoneUseDisplayRoot(displayId, expectedPackage) ?: return@runOnMainSync null
+        if (!root.refresh() || root.packageName?.toString() != expectedPackage.substringBefore('/')) return@runOnMainSync null
+        val nodes = mutableListOf<UiNode>()
+        val sourceNodes = mutableListOf<AccessibilityNodeInfo>()
+        val unknown = mutableListOf<Rect>()
+        val pending = ArrayDeque<Pair<AccessibilityNodeInfo, Int>>()
+        val seen = hashSetOf<AccessibilityNodeInfo>()
+        val rootBounds = root.bounds()
+        fun unread(node: AccessibilityNodeInfo) {
+            val bounds = runCatching { node.bounds() }.getOrDefault(rootBounds)
+            if (bounds.isEmpty) return
+            if (unknown.size < 64) unknown += Rect(bounds)
+            else { unknown.clear(); unknown += Rect(rootBounds) }
+        }
+        pending.addLast(root to 0)
+        while (pending.isNotEmpty()) {
+            if (nodes.size >= 250 || seen.size >= MAX_UI_TREE_VISITED_NODES) {
+                pending.forEach { unread(it.first) }
+                break
+            }
+            val (node, depth) = pending.removeFirst()
+            if (!seen.add(node)) continue
+            if (!node.isVisibleToUser && depth > 0) continue
+            val bounds = node.bounds()
+            if (node.isVisibleToUser && !bounds.isEmpty) {
+                // Keep containers too: a newly covering or intercepting node invalidates the local target.
+                nodes += UiNode(
+                    index = nodes.size, text = node.realText().take(500),
+                    desc = node.contentDescription?.toString().orEmpty().take(500),
+                    className = node.className?.toString().orEmpty(),
+                    packageName = node.packageName?.toString().orEmpty(), viewId = node.viewIdResourceName.orEmpty(),
+                    bounds = Rect(bounds), clickable = node.isClickable, longClickable = node.isLongClickable,
+                    scrollable = node.isScrollable, focused = node.isFocused, editable = node.isEditable,
+                    password = node.isPassword, enabled = node.isEnabled,
+                    checked = if (node.isCheckable) node.isChecked else null, selected = node.isSelected,
+                    hint = node.hintText?.toString().orEmpty().take(200),
+                )
+                sourceNodes += node
+            }
+            if (depth >= MAX_UI_TREE_DEPTH && node.childCount > 0) { unread(node); continue }
+            for (index in 0 until node.childCount) {
+                if (pending.size >= 1_000) { unread(node); break }
+                val child = runCatching { node.getChild(index) }.getOrNull()
+                if (child == null) unread(node) else pending.addLast(child to depth + 1)
+            }
+        }
+        PhoneUseDisplaySnapshot(nodes, unknown.isNotEmpty(), unknown, root.windowId,
+            phoneUseNodeSources.identify(displayId, root.windowId, sourceNodes))
+    }
+
+    fun confirmPhoneUseAction(message: String, imageReference: String, canExecute: () -> Boolean): Boolean =
+        phoneUseConfirmation.confirm(message, imageReference, canExecute)
+
+    fun setPhoneUseForegroundText(expectedPackage: String, text: String, canExecute: () -> Boolean): NodeActionResult =
+        setPhoneUseText(0, expectedPackage, text, canExecute)
+
+    fun setPhoneUseDisplayText(
+        displayId: Int, expectedPackage: String, text: String, canExecute: () -> Boolean,
+    ): NodeActionResult {
+        if (displayId <= 0) return NodeActionResult.failure("INVALID_DISPLAY", "后台文本输入不能使用主屏")
+        return setPhoneUseText(displayId, expectedPackage, text, canExecute)
+    }
+
+    private data class PhoneUseTextDispatch(
+        val result: NodeActionResult,
+        val node: AccessibilityNodeInfo? = null,
+    )
+
+    private data class PhoneUseTextReadback(
+        val text: String? = null,
+        val unavailableReason: String? = null,
+    )
+
+    private fun setPhoneUseText(
+        displayId: Int,
+        expectedPackage: String,
+        text: String,
+        canExecute: () -> Boolean,
+    ): NodeActionResult {
+        // Waiting on this looper would prevent accessibility events and app frame updates.
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            return NodeActionResult.failure("INPUT_THREAD_UNAVAILABLE", "文本输入需要在工作线程执行，尚未写入文字")
+        }
+        val wantedPackage = expectedPackage.substringBefore('/')
+        if (wantedPackage.isBlank()) {
+            return NodeActionResult.failure("FOREGROUND_UNAVAILABLE", "无法确认目标应用，尚未写入文字")
+        }
+        val dispatch = when (val call = callOnMainSync {
+            fun rejected(code: String, message: String) = PhoneUseTextDispatch(NodeActionResult.failure(code, message))
+            if (!canExecute()) return@callOnMainSync rejected("SESSION_CLOSED", "手机操作已取消，尚未写入文字")
+            val root = phoneUseDisplayRoot(displayId, wantedPackage)
+                ?: return@callOnMainSync rejected("DISPLAY_WINDOW_UNAVAILABLE", "目标显示的应用窗口不可访问，尚未写入文字")
+            // A refreshed root does not refresh its cached descendants. Invalidate only this
+            // display-local app subtree before finding the input; never flush/use the main screen.
+            clearCachedSubtree(root)
+            if (!root.refresh() || root.packageName?.toString() != wantedPackage) {
+                return@callOnMainSync rejected("DISPLAY_WINDOW_UNAVAILABLE", "目标应用窗口已失效，尚未写入文字")
+            }
+            val node = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+                ?: return@callOnMainSync rejected("NO_FOCUSED_EDITABLE", "目标应用没有聚焦输入框，请先点击输入框；尚未写入文字")
+            if (!node.refresh() || !node.isFocused || !node.isEditable || !node.isEnabled ||
+                !node.isVisibleToUser || node.isPassword || node.packageName?.toString() != wantedPackage ||
+                node.windowId != root.windowId) {
+                return@callOnMainSync rejected("UNSAFE_INPUT_TARGET", "目标输入框不可编辑或不属于当前应用窗口，尚未写入文字")
+            }
+            if (!canExecute()) return@callOnMainSync rejected("SESSION_CLOSED", "手机操作已取消，尚未写入文字")
+            val args = Bundle().apply {
+                putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+            }
+            // Dispatch exactly once. A failed readback must never replay this action.
+            if (!node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) {
+                return@callOnMainSync rejected("ACTION_FAILED", "目标输入框拒绝文本修改动作")
+            }
+            PhoneUseTextDispatch(NodeActionResult.success("ACTION_SET_TEXT", verified = false), node)
+        }) {
+            is MainThreadCallResult.Completed -> call.value
+                ?: return NodeActionResult.outcomeUnknown()
+            MainThreadCallResult.NOT_STARTED -> return NodeActionResult.failure(
+                "SERVICE_TIMEOUT", "无障碍服务主线程无响应，输入动作未执行",
+            )
+            MainThreadCallResult.OUTCOME_UNKNOWN -> return NodeActionResult.outcomeUnknown()
+        }
+        if (!dispatch.result.ok) return dispatch.result
+        val original = dispatch.node ?: return NodeActionResult.outcomeUnknown()
+        val deadline = SystemClock.elapsedRealtime() + PHONE_USE_TEXT_VERIFY_TIMEOUT_MS
+        var attempts = 0
+        while (true) {
+            if (Thread.currentThread().isInterrupted || !canExecute()) {
+                return NodeActionResult.failure("TEXT_READBACK_CANCELLED", "输入动作已提交，读回校验已取消；文字可能已写入，请先查看输入框，避免重复输入")
+            }
+            // A fresh window/tree is required: apps may apply the edit on their next frame,
+            // invalidate the old node handles, or move focus to another input after editing.
+            attempts++
+            val actual = runOnMainSync {
+                readPhoneUseText(displayId, wantedPackage, original)
+            } ?: PhoneUseTextReadback(unavailableReason = "无障碍服务未返回读回结果")
+            if (Thread.currentThread().isInterrupted || !canExecute()) {
+                return NodeActionResult.failure("TEXT_READBACK_CANCELLED", "输入动作已提交，读回校验已取消；文字可能已写入，请先查看输入框，避免重复输入")
+            }
+            if (actual.text != null && actual.text == text) {
+                return NodeActionResult.success("ACTION_SET_TEXT", verified = true)
+            }
+            val remaining = deadline - SystemClock.elapsedRealtime()
+            if (remaining <= 0) {
+                // Diagnostic metadata only: do not put the existing/replacement text in an error.
+                val reason = actual.unavailableReason ?: PhoneUseTextDiagnostics.mismatch(checkNotNull(actual.text), text)
+                return NodeActionResult.failure(
+                    "TEXT_READBACK_TIMEOUT",
+                    "应用返回输入动作已接受，但${PHONE_USE_TEXT_VERIFY_TIMEOUT_MS}毫秒内${attempts}次回读未确认写入：$reason；文字可能已写入，已停止后续操作，不会自动重新输入",
+                    visualReviewEligible = actual.text?.let { PhoneUseTextDiagnostics.mayVisuallyReview(it, text) } == true,
+                )
+            }
+            try {
+                Thread.sleep(minOf(PHONE_USE_TEXT_VERIFY_POLL_MS, remaining))
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                return NodeActionResult.failure("TEXT_READBACK_CANCELLED", "输入动作已提交，读回校验被中断；文字可能已写入，请先查看输入框，避免重复输入")
+            }
+        }
+    }
+
+    /** Read only the edited source node on its original display and window, even if focus moved. */
+    private fun readPhoneUseText(
+        displayId: Int,
+        expectedPackage: String,
+        original: AccessibilityNodeInfo,
+    ): PhoneUseTextReadback {
+        val window = windowsOnAllDisplays[displayId].orEmpty().firstOrNull {
+            it.displayId == displayId && it.id == original.windowId && it.isPhoneUseContentWindow()
+        } ?: return PhoneUseTextReadback(unavailableReason = "目标显示上的原窗口已不可访问")
+        val root = window.root
+            ?: return PhoneUseTextReadback(unavailableReason = "原窗口没有可读的无障碍节点树")
+        // getRoot/getChild can otherwise return the pre-edit cached field on virtual displays.
+        // Cache invalidation is scoped to the original window, followed by explicit node refresh.
+        clearCachedSubtree(root)
+        if (!root.refresh() || root.windowId != original.windowId || root.packageName?.toString() != expectedPackage) {
+            return PhoneUseTextReadback(unavailableReason = "原窗口节点树失效或目标应用已改变")
+        }
+        // Node equality compares accessibility source identity; text, bounds and view IDs
+        // cannot identify the edited field because multiple fields may share those values.
+        val node = findNode(root, maxNodes = MAX_UI_TREE_VISITED_NODES) { it == original }
+            ?: return PhoneUseTextReadback(unavailableReason = "新的节点树中无法找到原输入框")
+        if (!node.refresh()) {
+            return PhoneUseTextReadback(unavailableReason = "原输入框刷新失败，不能使用缓存文字验证输入")
+        }
+        if (node != original || !node.isEditable || node.isPassword || node.windowId != original.windowId ||
+            node.packageName?.toString() != expectedPackage) {
+            return PhoneUseTextReadback(unavailableReason = "原输入框已不可读取")
+        }
+        // A known hint is an empty value. An absent value remains unreadable, even
+        // when the requested edit clears the field; it must not become a false success.
+        val value = if (node.isShowingHintText) "" else node.text?.toString()
+        return if (value != null) PhoneUseTextReadback(text = value)
+            else PhoneUseTextReadback(unavailableReason = "原输入框没有向无障碍服务提供文字")
+    }
+
+    private fun phoneUseDisplayRoot(displayId: Int, expectedPackage: String): AccessibilityNodeInfo? {
+        val wantedPackage = expectedPackage.substringBefore('/')
+        if (displayId < 0 || wantedPackage.isBlank()) return null
+        val candidates = windowsOnAllDisplays[displayId].orEmpty().filter {
+            it.displayId == displayId && it.isPhoneUseContentWindow()
+        }
+        // A virtual screen can expose its app without marking a window focused or globally active.
+        // Never substitute another package when the display does expose a focused application.
+        val focused = candidates.firstOrNull { it.isFocused }
+        if (focused != null) return focused.root?.takeIf { it.packageName?.toString() == wantedPackage }
+        return candidates.asSequence().mapNotNull { it.root }
+            .firstOrNull { it.packageName?.toString() == wantedPackage }
+    }
+
+    /**
+     * System permission/confirmation windows are normally TYPE_SYSTEM, not TYPE_APPLICATION.
+     * Reading only application windows hides their tree and forces blind taps after approval.
+     * IME and Eta's own accessibility overlays remain excluded; the display id is still checked
+     * by every caller, so this cannot borrow a window from the physical screen.
+     */
+    private fun AccessibilityWindowInfo.isPhoneUseContentWindow(): Boolean =
+        type != AccessibilityWindowInfo.TYPE_INPUT_METHOD &&
+            type != AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY
 
     /** 临时查询不发布任何全局节点状态，适用于 wait_for_text。 */
     fun queryNodes(maxNodes: Int): List<UiNode> =
@@ -356,6 +592,15 @@ class AgentAccessibilityService : AccessibilityService() {
 
     private fun windowContentGeneration(windowId: Int): Long =
         windowContentGenerations[windowId] ?: 0L
+
+    private fun prunePhoneUseNodeSources() {
+        // Window IDs only; never enumerate or read another display's app content.
+        val byDisplay = runCatching { windowsOnAllDisplays }.getOrNull() ?: return
+        val live = (0 until byDisplay.size()).associate { index ->
+            byDisplay.keyAt(index) to byDisplay.valueAt(index).orEmpty().mapTo(hashSetOf()) { it.id }
+        }
+        phoneUseNodeSources.retainWindows(live)
+    }
 
     private fun pruneWindowContentGenerations() {
         if (windowContentGenerations.isEmpty()) return
@@ -888,6 +1133,12 @@ class AgentAccessibilityService : AccessibilityService() {
             successMethod = "GESTURE_TAP",
         )
 
+    fun gesturePhoneUseDoubleTap(x: Float, y: Float, canExecute: () -> Boolean): NodeActionResult =
+        dispatchGestureResult(
+            Path().apply { moveTo(x, y); lineTo(x, y) }, 50,
+            successMethod = "GESTURE_DOUBLE_TAP", doubleTap = true, canExecute = canExecute,
+        )
+
     fun gestureSwipe(
         x1: Float,
         y1: Float,
@@ -1054,10 +1305,11 @@ class AgentAccessibilityService : AccessibilityService() {
             .maxByOrNull(ScreenshotWindow::layer)
             ?.id
             ?: captureWindows.maxByOrNull(ScreenshotWindow::layer)?.id
+        val topWindowId = captureWindows.maxByOrNull(ScreenshotWindow::layer)?.id
         val criticalWindowIds = captureWindows
             .asSequence()
             .filter { window ->
-                window.id == topApplicationWindowId || window.active || window.focused
+                window.id == topApplicationWindowId || window.id == topWindowId || window.active || window.focused
             }
             .map(ScreenshotWindow::id)
             .toSet()
@@ -1640,12 +1892,13 @@ class AgentAccessibilityService : AccessibilityService() {
 
     private fun findNode(
         node: AccessibilityNodeInfo,
+        maxNodes: Int = MAX_FOCUS_SEARCH_NODES,
         predicate: (AccessibilityNodeInfo) -> Boolean,
     ): AccessibilityNodeInfo? {
         val queue = ArrayDeque<Pair<AccessibilityNodeInfo, Int>>()
         val visited = hashSetOf<AccessibilityNodeInfo>()
         queue.addLast(node to 0)
-        while (queue.isNotEmpty() && visited.size < MAX_FOCUS_SEARCH_NODES) {
+        while (queue.isNotEmpty() && visited.size < maxNodes) {
             val (current, depth) = queue.removeFirst()
             if (!visited.add(current)) continue
             if (predicate(current)) return current
@@ -1794,6 +2047,8 @@ class AgentAccessibilityService : AccessibilityService() {
         path: Path,
         durationMs: Long,
         successMethod: String,
+        doubleTap: Boolean = false,
+        canExecute: () -> Boolean = { true },
     ): NodeActionResult {
         if (Looper.myLooper() == Looper.getMainLooper()) {
             return NodeActionResult.failure(
@@ -1805,13 +2060,16 @@ class AgentAccessibilityService : AccessibilityService() {
         val gate = MainThreadCallGate()
         val outcome = java.util.concurrent.atomic.AtomicReference<GestureDispatch>()
         val posted = mainHandler.post {
-            if (!gate.tryStart()) {
+            if (!gate.tryStart() || !canExecute()) {
                 latch.countDown()
                 return@post
             }
             val gesture = runCatching {
                 GestureDescription.Builder()
                     .addStroke(GestureDescription.StrokeDescription(path, 0, durationMs))
+                    .apply {
+                        if (doubleTap) addStroke(GestureDescription.StrokeDescription(path, durationMs + 80, durationMs))
+                    }
                     .build()
             }.getOrElse {
                 outcome.set(GestureDispatch.NOT_DISPATCHED)
@@ -1854,7 +2112,7 @@ class AgentAccessibilityService : AccessibilityService() {
             return NodeActionResult.failure("GESTURE_NOT_DISPATCHED", "无障碍主线程拒绝手势任务")
         }
         val finishedInTime = try {
-            latch.await(durationMs + GESTURE_CALLBACK_GRACE_MS, TimeUnit.MILLISECONDS)
+            latch.await((if (doubleTap) durationMs * 2 + 80 else durationMs) + GESTURE_CALLBACK_GRACE_MS, TimeUnit.MILLISECONDS)
         } catch (_: InterruptedException) {
             Thread.currentThread().interrupt()
             false
@@ -1941,13 +2199,14 @@ class AgentAccessibilityService : AccessibilityService() {
         val method: String = "",
         val clipboardWritten: Boolean = false,
         val verified: Boolean? = null,
+        val visualReviewEligible: Boolean = false,
     ) {
         companion object {
             fun success(method: String, verified: Boolean? = null): NodeActionResult =
                 NodeActionResult(ok = true, method = method, verified = verified)
 
-            fun failure(code: String, message: String): NodeActionResult =
-                NodeActionResult(ok = false, code = code, message = message)
+            fun failure(code: String, message: String, visualReviewEligible: Boolean = false): NodeActionResult =
+                NodeActionResult(ok = false, code = code, message = message, visualReviewEligible = visualReviewEligible)
 
             fun outcomeUnknown(): NodeActionResult = failure(
                 code = "ACTION_OUTCOME_UNKNOWN",
@@ -2343,6 +2602,8 @@ class AgentAccessibilityService : AccessibilityService() {
         private const val SCROLL_GESTURE_DURATION_MS = 300L
         private const val SCROLL_VERIFY_TIMEOUT_MS = 520L
         private const val GESTURE_CALLBACK_GRACE_MS = 1_500L
+        private const val PHONE_USE_TEXT_VERIFY_TIMEOUT_MS = 2_500L
+        private const val PHONE_USE_TEXT_VERIFY_POLL_MS = 80L
         private const val MAIN_SYNC_TIMEOUT_SECONDS = 3L
         private const val SCROLL_EVENT_OBSERVATION_TIMEOUT_MS =
             MAIN_SYNC_TIMEOUT_SECONDS * 1_000L +

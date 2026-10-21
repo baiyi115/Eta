@@ -187,6 +187,7 @@ internal class AgentRuntimeRunExecutor(
                 screenshotExcludedPackages = {
                     entrySurfaceGuard?.consumeScreenshotExcludedPackages().orEmpty()
                 },
+                checkRunActive = { runController.throwIfCancelled() },
                 beforeToolExecution = { toolName ->
                     val requiresAccessibility =
                         AgentToolRequirements.requiresAccessibility(toolName)
@@ -207,7 +208,7 @@ internal class AgentRuntimeRunExecutor(
                                     code = accessibility.code,
                                     message = accessibility.message,
                                 )
-                            entrySurfaceGuard?.dismissOnce() == false ->
+                            toolName != "background_phone_use" && entrySurfaceGuard?.dismissOnce() == false ->
                                 ToolExecutionDecision.Reject(
                                     code = "ENTRY_SURFACE_NOT_READY",
                                     message = "入口窗口关闭未完成；本次工具未执行，请勿在当前任务中重复调用",
@@ -227,6 +228,7 @@ internal class AgentRuntimeRunExecutor(
             val routingExecutor = RoutingToolExecutor(
                 local = executor,
                 mcp = McpToolExecutor(mcpSnapshot),
+                beforeTool = executor::rejectPhoneUseMix,
             )
             toolExecutor = routingExecutor
             toolsBinding = runController.register(routingExecutor::close)
@@ -244,7 +246,10 @@ internal class AgentRuntimeRunExecutor(
                 if (characterMemoryTools != null && memoryEnabled) CharacterMemoryTools.appendSchemas(tools)
             }
             val runToolExecutor = AgentModelClient.ToolExecutor { call ->
-                if (call.name == AgentConversationToolCatalog.READ_HISTORY && historyTool != null) {
+                val phoneUseRejection = executor.rejectPhoneUseMix(call.name)
+                if (phoneUseRejection != null) {
+                    phoneUseRejection
+                } else if (call.name == AgentConversationToolCatalog.READ_HISTORY && historyTool != null) {
                     historyTool.execute(call)
                 } else if (call.name in CharacterMemoryTools.NAMES && characterMemoryTools != null) {
                     characterMemoryTools.execute(call)

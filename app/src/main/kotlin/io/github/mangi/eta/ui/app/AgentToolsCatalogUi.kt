@@ -13,6 +13,8 @@ internal fun buildToolsState(context: Context): AgentToolsUiState =
                 id = "screen",
                 title = context.getString(R.string.state_screens_and_controls_3f095b),
                 tools = listOf(
+                    ToolItemUi("phone_use", context.getString(R.string.tool_phone_use), context.getString(R.string.tool_phone_use_description)),
+                    ToolItemUi("background_phone_use", context.getString(R.string.tool_background_phone_use), context.getString(R.string.tool_background_phone_use_description)),
                     ToolItemUi("observe_screen", context.getString(R.string.tool_ui_watch_the_screen_e70f2a), context.getString(R.string.tool_ui_read_the_current_node_and_attach_the_original_im_df1fec)),
                     ToolItemUi("tap_element", context.getString(R.string.tool_ui_click_element_7a3d91), context.getString(R.string.tool_ui_click_on_the_most_recently_observed_node_b4cf5a)),
                     ToolItemUi("tap_area", context.getString(R.string.tool_ui_click_area_cbaa08), context.getString(R.string.tool_ui_click_by_coordinate_area_2ad961)),

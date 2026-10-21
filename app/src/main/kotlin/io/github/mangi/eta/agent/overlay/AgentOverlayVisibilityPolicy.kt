@@ -83,6 +83,7 @@ internal object AgentOverlayVisibilityPolicy {
     )
 
     private val foregroundOperationTools = setOf(
+        "phone_use",
         "observe_screen",
         *foregroundDrivingTools.toTypedArray(),
     )

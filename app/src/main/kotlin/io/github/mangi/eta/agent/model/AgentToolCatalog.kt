@@ -21,6 +21,11 @@ internal object AgentToolCatalog {
         capabilities.project(JSONArray().also { tools ->
             AgentContextAppToolCatalog.appendTo(tools)
             AgentGestureToolCatalog.appendTo(tools)
+            AgentPhoneUseToolCatalog.appendTo(
+                tools = tools,
+                includeForeground = deviceDirectTools,
+                includeBackground = deviceSensitiveActionTools,
+            )
             AgentTextSystemToolCatalog.appendTo(tools)
             AgentDeviceToolCatalog.appendTo(
                 tools,

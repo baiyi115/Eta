@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="tool_phone_use">Phone use</string>
+    <string name="tool_background_phone_use">Background phone use</string>
+    <string name="tool_phone_use_description">Operate the phone step by step with screenshots and a session action budget.</string>
+    <string name="tool_background_phone_use_description">Operate an isolated virtual display. Requires Root and compatible display and input isolation.</string>
+    <string name="chat_reply_screenshot">Screenshot %1$d</string>
+    <string name="chat_reply_image_loading">Loading screenshot…</string>
+    <string name="chat_reply_image_zoom">Pinch or double-tap to zoom</string>
+    <string name="chat_reply_image_failed">Unable to load screenshot</string>
+    <string name="phone_use_confirmation_title">Eta · Confirm phone action</string>
+    <string name="phone_use_confirmation_preview">Screenshot to review</string>
+    <string name="phone_use_confirmation_allow">Allow this step</string>
+    <string name="phone_use_confirmation_cancel">Cancel and stop</string>
+</resources>

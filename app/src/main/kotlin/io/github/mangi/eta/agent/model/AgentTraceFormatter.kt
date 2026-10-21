@@ -8,6 +8,8 @@ import org.json.JSONObject
 internal class AgentTraceFormatter {
     fun summarizeArguments(toolCall: AgentModelClient.ToolCall): String =
         when (toolCall.name) {
+            "phone_use" -> "前台手机操作"
+            "background_phone_use" -> "后台手机操作"
             BROWSER_TOOL_NAME -> summarizeBrowserArguments(toolCall.argumentsJson)
             "web_search" -> "搜索网页"
             "fetch_url" -> summarizeFetchArguments(toolCall.argumentsJson)
@@ -268,6 +270,15 @@ internal class AgentTraceFormatter {
         result: AgentModelClient.ToolResult,
     ): String {
         val json = parseResultJson(result)
+        if (toolName in setOf("phone_use", "background_phone_use")) {
+            return when {
+                json?.optString("status") == "COMPLETED" -> "手机操作已结束，正在整理观察结果"
+                json?.optString("status") == "STOPPED" -> "手机操作已停止"
+                (json?.optInt("reply_screenshot_count", 0) ?: 0) > 0 -> "已保留 ${json?.optInt("reply_screenshot_count")} 张截图，将随回复发送"
+                json?.optBoolean("ok") == true -> "已观察手机屏幕"
+                else -> "手机操作未执行"
+            }
+        }
         if (toolName == "web_search" || toolName == "fetch_url") return summarizeWebResult(toolName, json)
         // 终端 exit_code != 0 时 ok=false 但没有 code 字段，必须走专用分支保留退出码与输出
         if (toolName in AgentTerminalToolCatalog.names || toolName == "run_command") {

@@ -98,10 +98,26 @@ internal class AgentLocalTools(
     private val skillPackageInstaller: SkillPackageInstaller? = null,
     runAvailableSkillIds: Set<String> = emptySet(),
     pendingSkillConflict: PendingSkillConflictCapability? = null,
+    private val checkRunActive: () -> Unit = {},
     private val rootAvailable: () -> Boolean = { RootAccess.isGranted },
 ) : AgentModelClient.ToolExecutor, AutoCloseable {
 
     private val closed = AtomicBoolean(false)
+    private fun checkPhoneUseActive() {
+        checkRunActive()
+        if (closed.get() || Thread.currentThread().isInterrupted) {
+            throw io.github.mangi.eta.agent.phoneuse.PhoneUseFailure("SESSION_CLOSED", "手机操作已取消。")
+        }
+    }
+    private val phoneUse = io.github.mangi.eta.agent.phoneuse.PhoneUseSession(
+        factory = { name ->
+            if (name == "background_phone_use") {
+                io.github.mangi.eta.agent.phoneuse.BackgroundPhoneUseBackend(context, ::checkPhoneUseActive, rootAvailable)
+            } else {
+                io.github.mangi.eta.agent.phoneuse.ForegroundPhoneUseBackend(context, { executeLocal(it, phoneUseInternal = true) }, ::checkPhoneUseActive)
+            }
+        }, checkActive = ::checkPhoneUseActive,
+    )
     private val deviceController = RootShellDeviceController(logger, screenshotExcludedPackages, rootAvailable)
     private val rootCommandExecutor = BoundedRootCommandExecutor(logger, rootAvailable = rootAvailable)
     private val structuredDeviceTools = AgentStructuredDeviceTools(
@@ -147,6 +163,7 @@ internal class AgentLocalTools(
 
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
+        phoneUse.close()
         publishedObservation.set(PublishedObservation())
         AgentBrowserSession.interruptAgentAction(browserRunId)
         webTools.close()
@@ -156,29 +173,52 @@ internal class AgentLocalTools(
         inspectedGitHubSnapshots.clear()
     }
 
-    override fun execute(toolCall: AgentModelClient.ToolCall): AgentModelClient.ToolResult =
+    override fun execute(toolCall: AgentModelClient.ToolCall): AgentModelClient.ToolResult = executeLocal(toolCall)
+
+    /** Shared with the router so remote MCP tools cannot bypass the local session boundary. */
+    fun rejectPhoneUseMix(toolName: String): AgentModelClient.ToolResult? {
+        if (!phoneUse.hasSession || toolName in setOf("phone_use", "background_phone_use", "search_apps", "get_current_context", "web_search", "fetch_url")) return null
+        phoneUse.close()
+        return AgentModelClient.ToolResult(
+            JSONObject().put("ok", false).put("code", "PHONE_USE_OWNS_DEVICE").toString(),
+            sensitive = true, stopMessage = "手机操作期间混用了其他工具，已停止；请在新的运行中继续。",
+        )
+    }
+
+    private fun phoneUseGateResult(result: AgentModelClient.ToolResult): AgentModelClient.ToolResult {
+        if (!phoneUse.hasSession) return result
+        phoneUse.close()
+        return result.copy(sensitive = true, stopMessage = "手机操作所需权限或服务已失效，已停止；请恢复后重新开始。")
+    }
+
+    private fun executeLocal(toolCall: AgentModelClient.ToolCall, phoneUseInternal: Boolean = false): AgentModelClient.ToolResult =
         runCatching {
+            checkRunActive()
+            if (closed.get()) return@runCatching AgentModelClient.ToolResult(
+                errorResult("RUN_CLOSED", "本次运行已关闭"), stopMessage = "本次运行已关闭。")
+            if (!phoneUseInternal) rejectPhoneUseMix(toolCall.name)?.let { return@runCatching it }
             val args = JSONObject(toolCall.argumentsJson.ifBlank { "{}" })
             if (AgentToolRequirements.find(toolCall.name) != null &&
                 AgentToolRequirements.rootDenied(toolCall.name, args, rootAvailable())
             ) {
-                return@runCatching textResult(errorResult("ROOT_REQUIRED", "此操作需要 Root 授权，本次未执行"))
+                return@runCatching phoneUseGateResult(textResult(errorResult("ROOT_REQUIRED", "此操作需要 Root 授权，本次未执行")))
             }
-            deviceToolPermissionError(toolCall.name)?.let { return@runCatching it }
+            deviceToolPermissionError(toolCall.name)?.let { return@runCatching phoneUseGateResult(it) }
             memoryToolPermissionError(toolCall.name)?.let { return@runCatching it }
             when (val decision = beforeToolExecution(toolCall.name)) {
                 ToolExecutionDecision.Allow -> Unit
                 is ToolExecutionDecision.Reject -> {
                     if (decision.code.startsWith("ACCESSIBILITY_")) publishedObservation.set(PublishedObservation())
-                    return@runCatching textResult(
+                    return@runCatching phoneUseGateResult(textResult(
                         errorResult(
                             code = decision.code,
                             message = decision.message,
                         ),
-                    )
+                    ))
                 }
             }
             when (toolCall.name) {
+                "phone_use", "background_phone_use" -> phoneUse.execute(toolCall.name, args)
                 "get_current_context" -> textResult(DeviceContextTool.current(context))
                 "search_apps" -> textResult(searchApps(args))
                 "launch_app" -> textResult(launchApp(args))
@@ -1412,6 +1452,7 @@ internal class AgentLocalTools(
 
     private companion object {
         val DEVICE_DIRECT_TOOL_NAMES = io.github.mangi.eta.agent.model.AgentPhoneToolCatalog.direct + setOf(
+            "phone_use",
             "set_alarm",
             "set_timer",
             "device_status",
@@ -1457,6 +1498,7 @@ internal class AgentLocalTools(
             "search_wechat_chat_images",
         )
         val DEVICE_SENSITIVE_ACTION_TOOL_NAMES = io.github.mangi.eta.agent.model.AgentPhoneToolCatalog.writes + setOf(
+            "background_phone_use",
             "set_setting",
             "set_device_state",
             "app_state_control",

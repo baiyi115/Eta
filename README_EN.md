@@ -43,6 +43,7 @@ More screenshots: chat, system tools, and settings
 
 - **Direct system API calls:** use Android APIs and system intents to set alarms, control media, adjust volume, and read device status without navigating through app screens.
 - **GUI Agent:** combine the accessibility UI tree, element targeting, and screenshots taken as needed to tap, scroll, and type. While it works, a flowing edge light shows the phone is being driven, and a status capsule below the status bar shows the current step; tap it to add instructions, pause, or stop. On Android 16 QPR2 and later, run status also appears in the status bar chip and on the lock screen via Live Updates, which some systems map to Fluid Cloud and similar surfaces.
+- **Phone use:** operate the phone through a session with fresh screen observations, target checks, and an action budget. Foreground use requires Android 14+ window capture; background use requires root and ROM support for an isolated virtual display. Completion, takeover, or uncertain execution ends the run. Background failures stop without switching to the main screen.
 - **Built-in browser:** load JavaScript pages in a WebView, extract readable content, interact with the DOM, and capture screenshots. You can open the same browser session to take control.
 - **Terminal and files:** use Android `user`/`root` shells, Alpine or Debian Linux, file operations, and scripts, with support for persistent sessions, asynchronous commands, and daemon tasks.
 

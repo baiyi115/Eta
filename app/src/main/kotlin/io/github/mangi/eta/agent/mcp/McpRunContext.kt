@@ -283,9 +283,10 @@ internal class McpToolExecutor(
 internal class RoutingToolExecutor(
     private val local: AgentModelClient.ToolExecutor,
     private val mcp: McpToolExecutor,
+    private val beforeTool: (String) -> AgentModelClient.ToolResult? = { null },
 ) : AgentModelClient.ToolExecutor, AutoCloseable {
     override fun execute(toolCall: AgentModelClient.ToolCall): AgentModelClient.ToolResult =
-        if (mcp.contains(toolCall.name)) mcp.execute(toolCall) else local.execute(toolCall)
+        beforeTool(toolCall.name) ?: if (mcp.contains(toolCall.name)) mcp.execute(toolCall) else local.execute(toolCall)
 
     override fun close() {
         runCatching { mcp.close() }

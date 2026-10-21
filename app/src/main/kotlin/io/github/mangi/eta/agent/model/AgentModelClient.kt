@@ -361,6 +361,12 @@ internal object AgentModelClient {
          * 最终 assistant 自己组织的答复不受此标记影响。
          */
         val sensitive: Boolean = false,
+        /** Trusted executor requests a controlled end after all tool results in this batch are recorded. */
+        val stopMessage: String? = null,
+        /** Release tool resources, block further tools, then synthesize the answer from observed evidence. */
+        val finalizeResponse: Boolean = false,
+        /** Explicit user-visible attachments, separate from transient model observations. */
+        val replyImages: List<ModelImage> = emptyList(),
     )
 
     /** 图片引用：入口侧可为本地 URI/路径，进入模型协议前必须解析为远程 URL 或 data URL。 */

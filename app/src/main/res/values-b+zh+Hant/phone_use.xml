@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="tool_phone_use">操作手機</string>
+    <string name="tool_background_phone_use">背景操作手機</string>
+    <string name="tool_phone_use_description">根據截圖逐步操作手機，使用會話與操作步數限制。</string>
+    <string name="tool_background_phone_use_description">在獨立虛擬螢幕操作，需要 Root 及相容的顯示與輸入隔離能力。</string>
+    <string name="chat_reply_screenshot">截圖 %1$d</string>
+    <string name="chat_reply_image_loading">正在載入截圖…</string>
+    <string name="chat_reply_image_zoom">雙指或點兩下縮放圖片</string>
+    <string name="chat_reply_image_failed">無法載入截圖</string>
+    <string name="phone_use_confirmation_title">Eta · 確認手機操作</string>
+    <string name="phone_use_confirmation_preview">待核對的截圖</string>
+    <string name="phone_use_confirmation_allow">允許這一步</string>
+    <string name="phone_use_confirmation_cancel">取消並停止</string>
+</resources>

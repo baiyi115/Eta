@@ -177,3 +177,9 @@ Eta 不把下列工具打包进 APK。用户在 Linux 工具环境页面主动�
 JADX 的发行包许可证会随所需 CLI 文件一并保留；Apktool、smali 与 baksmali 的许可证和第三方声明保留在各自 JAR 制品中。Eta 仅提供经过校验的安装、命令入口和能力边界，不对这些工具重新授权。
 
 GitHub 的实际制品域名不可达或较慢时，安装器可能通过 `gh-proxy.com` 请求同一个公开 Release URL；Node.js 制品可能先通过 `cdn.npmmirror.com` 请求。下载入口会获知用户的网络地址及所请求的公开制品；Eta 不向其发送账号、Cookie、API Key 或其他 Eta 数据，并在落盘前继续校验内置的官方制品大小与 SHA-256。不希望使用下载入口的用户可以不安装对应可选档案。
+
+## MiAIPlus Phone use helper
+
+后台手机操作的 `DisplayHelper.java` 改编自 [MiAIPlus](https://github.com/astoHu1/MiAIPlus)，固定提交 `dc9107ab65fc5db2968e2f854a86735cff86a196`，原代码采用 Apache License 2.0。Eta 修改了包名、显示名称、双击、窗口安全检查及释放路径；修改声明保留于文件头。完整上游 [LICENSE](../app/src/main/assets/third_party/miaiplus/LICENSE) 和 [NOTICE](../app/src/main/assets/third_party/miaiplus/NOTICE) 随 APK 打包，原许可权利保持不变。会话协议与隔离设计参考同一提交的 Phone use 实现。
+
+Phone use 补强中的 `PhoneUseTargetGuard.kt` 参考同一提交的 `PageGuard.java`，`PhoneUseVisualGuard.kt` 改编自 `VisualRegion.java`（astoHu1，Apache-2.0）。保留局部目标/遮挡及JPEG容差校验思想，增加 Eta 的节点格式、部分树区域保护和生命周期集成；相关改编文件保留来源声明。

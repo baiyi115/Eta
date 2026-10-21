@@ -31,17 +31,16 @@ import androidx.compose.ui.platform.ComposeView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
-import androidx.lifecycle.setViewTreeLifecycleOwner
 import androidx.savedstate.SavedStateRegistry
 import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
-import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import io.github.mangi.eta.EtaApp
 import io.github.mangi.eta.agent.accessibility.AgentAccessibilityService
 import io.github.mangi.eta.agent.device.RootAccess
 import io.github.mangi.eta.agent.media.AgentImageCodec
 import io.github.mangi.eta.agent.model.AgentModelClient
 import io.github.mangi.eta.agent.overlay.AgentHapticFeedback
+import io.github.mangi.eta.agent.overlay.AgentOverlayWindowHost
 import io.github.mangi.eta.agent.overlay.AgentOverlayGlow
 import io.github.mangi.eta.agent.overlay.ScreenCornerRadii
 import io.github.mangi.eta.agent.overlay.AgentOverlayCapsule
@@ -94,6 +93,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     )
 
     private var windowManager: WindowManager? = null
+    private var overlayWindowHost: AgentOverlayWindowHost? = null
     private var glowView: ComposeView? = null
     private var capsuleView: ComposeView? = null
     private var resultCardView: ComposeView? = null
@@ -207,9 +207,9 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         mainHandler.removeCallbacksAndMessages(null)
         AgentOverlayClearance.detach(clearanceHost)
         unregisterResultCardBack()
-        resultCardView?.let { view -> runCatching { windowManager?.removeView(view) } }
-        capsuleView?.let { view -> runCatching { windowManager?.removeView(view) } }
-        glowView?.let { view -> runCatching { windowManager?.removeView(view) } }
+        resultCardView?.let { view -> runCatching { overlayWindowHost?.removeView(view) } }
+        capsuleView?.let { view -> runCatching { overlayWindowHost?.removeView(view) } }
+        glowView?.let { view -> runCatching { overlayWindowHost?.removeView(view) } }
         resultCardView = null
         capsuleView = null
         glowView = null
@@ -217,6 +217,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         capsuleParams = null
         glowParams = null
         windowManager = null
+        overlayWindowHost = null
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
         super.onDestroy()
     }
@@ -871,15 +872,17 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         if (capsuleView != null) return
         // TYPE_ACCESSIBILITY_OVERLAY 免 SYSTEM_ALERT_WINDOW 权限；仅回退态（无障碍未启用）才需检查
         if (AgentAccessibilityService.current() == null && !Settings.canDrawOverlays(this)) return
-        val wm = overlayContext().getSystemService(Context.WINDOW_SERVICE) as? WindowManager ?: return
-        windowManager = wm
+        val host = overlayWindowHost ?: runCatching {
+            AgentOverlayWindowHost(overlayContext(), this, this)
+        }.getOrNull()?.also { overlayWindowHost = it } ?: return
+        windowManager = host.windowManager
 
         // ── 氛围光窗口：全屏触摸穿透，彩虹光圈，截图时被 takeScreenshotOfWindow 过滤 ─
         val glow = createOverlayComposeView {
             AgentOverlayGlow(state = state.value, corners = screenCornerRadii())
         }
         val glowLp = glowLayoutParams()
-        runCatching { wm.addView(glow, glowLp) }.onFailure { throwable ->
+        runCatching { host.addView(glow, glowLp) }.onFailure { throwable ->
             AndroidAgentLogger.warnThrottled("runtime_glow_add_view_failed") {
                 "Agent runtime glow addView failed: type=${throwable.safeLogType()}"
             }
@@ -903,7 +906,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             )
         }
         val capsuleLp = capsuleLayoutParams()
-        runCatching { wm.addView(capsule, capsuleLp) }.onFailure { throwable ->
+        runCatching { host.addView(capsule, capsuleLp) }.onFailure { throwable ->
             AndroidAgentLogger.warnThrottled("runtime_capsule_add_view_failed") {
                 "Agent runtime capsule addView failed: type=${throwable.safeLogType()}"
             }
@@ -962,8 +965,9 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         }
     }
 
-    private fun showResultCard(wm: WindowManager) {
+    private fun showResultCard() {
         if (resultCardView != null) return
+        val host = overlayWindowHost ?: return
         val card = createOverlayComposeView {
             AgentResultCard(
                 state = state.value,
@@ -972,7 +976,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             )
         }
         val lp = resultCardLayoutParams()
-        runCatching { wm.addView(card, lp) }.onFailure { throwable ->
+        runCatching { host.addView(card, lp) }.onFailure { throwable ->
             AndroidAgentLogger.warnThrottled("runtime_result_card_add_view_failed") {
                 "Agent runtime result card addView failed: type=${throwable.safeLogType()}"
             }
@@ -1051,16 +1055,12 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     }
 
     private fun createOverlayComposeView(content: @Composable () -> Unit): ComposeView =
-        ComposeView(overlayContext()).apply {
-            setViewTreeLifecycleOwner(this@AgentRuntimeService)
-            setViewTreeSavedStateRegistryOwner(this@AgentRuntimeService)
-            setContent {
-                MiuixTheme(colors = if (isNightMode()) darkColorScheme() else lightColorScheme()) {
-                    // 部分 ROM 会给 TYPE_ACCESSIBILITY_OVERLAY 分配软件 Canvas；Miuix 的
-                    // RuntimeShader 只检查系统版本，因此系统浮层统一使用其普通圆角回退。
-                    CompositionLocalProvider(LocalSquircleEnabled provides false) {
-                        content()
-                    }
+        requireNotNull(overlayWindowHost).createComposeView {
+            MiuixTheme(colors = if (isNightMode()) darkColorScheme() else lightColorScheme()) {
+                // 部分 ROM 会给 TYPE_ACCESSIBILITY_OVERLAY 分配软件 Canvas；Miuix 的
+                // RuntimeShader 只检查系统版本，因此系统浮层统一使用其普通圆角回退。
+                CompositionLocalProvider(LocalSquircleEnabled provides false) {
+                    content()
                 }
             }
         }
@@ -1212,7 +1212,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             // 撤掉胶囊和边缘光，改显半屏结果卡片，不自动关闭，用户手动关闭
             capsuleExpanded.value = false
             removeAmbientWindows()
-            windowManager?.let(::showResultCard)
+            showResultCard()
             mainHandler.removeCallbacksAndMessages(hideToken)
         } else {
             dismissAndStop()
@@ -1222,8 +1222,8 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     private fun removeAmbientWindows() {
         mainHandler.removeCallbacks(restoreCapsule)
         capsuleYielded.value = false
-        capsuleView?.let { view -> runCatching { windowManager?.removeView(view) } }
-        glowView?.let { view -> runCatching { windowManager?.removeView(view) } }
+        capsuleView?.let { view -> runCatching { overlayWindowHost?.removeView(view) } }
+        glowView?.let { view -> runCatching { overlayWindowHost?.removeView(view) } }
         capsuleView = null
         glowView = null
         capsuleParams = null
@@ -1236,9 +1236,9 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         mainHandler.removeCallbacks(restoreCapsule)
         capsuleYielded.value = false
         unregisterResultCardBack()
-        resultCardView?.let { view -> runCatching { windowManager?.removeView(view) } }
-        capsuleView?.let { view -> runCatching { windowManager?.removeView(view) } }
-        glowView?.let { view -> runCatching { windowManager?.removeView(view) } }
+        resultCardView?.let { view -> runCatching { overlayWindowHost?.removeView(view) } }
+        capsuleView?.let { view -> runCatching { overlayWindowHost?.removeView(view) } }
+        glowView?.let { view -> runCatching { overlayWindowHost?.removeView(view) } }
         resultCardView = null
         capsuleView = null
         glowView = null
@@ -1246,6 +1246,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         capsuleParams = null
         glowParams = null
         windowManager = null
+        overlayWindowHost = null
         stopSelf()
     }
 

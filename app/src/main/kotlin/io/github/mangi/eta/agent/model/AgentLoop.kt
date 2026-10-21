@@ -38,6 +38,7 @@ internal class AgentLoop(
         val content: String,
         val reasoningContent: String,
         val sensitiveToolCallIds: Set<String>,
+        val replyImages: List<AgentModelClient.ModelImage> = emptyList(),
     )
 
     private data class ToolOutcome(
@@ -49,6 +50,7 @@ internal class AgentLoop(
     private val accumulatedReasoning = StringBuilder()
     private val sensitiveToolCallIds = linkedSetOf<String>()
     private var pendingToolImageMessage: JSONObject? = null
+    private val replyImages = linkedMapOf<String, AgentModelClient.ModelImage>()
     private val context = AgentContextSession(
         config, messages, systemCount, operationId, provider, runController,
         { sensitiveToolCallIds }, onEvent, onContextSnapshot, { transcript.length() },
@@ -83,13 +85,20 @@ internal class AgentLoop(
     fun run(): Result {
         var round = 1
         var precedingTools: JSONArray? = null
+        var finalizingResponse = false
 
         while (true) {
             runController.throwIfCancelled()
-            if (purpose.allowsTools) appendPendingSteeringMessage()
+            if (finalizingResponse) {
+                // Include already accepted supplements, then seal this run before the answer-only round.
+                while (appendPendingSteeringOrSeal()) { /* drain accepted supplements */ }
+            } else if (purpose.allowsTools) appendPendingSteeringMessage()
+            val roundPurpose = if (finalizingResponse) ProviderRequestPurpose.TOOL_SUMMARY else purpose
 
             // Anthropic 思考签名绑定发出工具调用时的 system 与 tools；工具结果回传后再刷新目录。
-            val roundTools = if (AnthropicEphemeralState.hasPendingToolResponse(messages)) {
+            val roundTools = if (finalizingResponse) {
+                JSONArray()
+            } else if (AnthropicEphemeralState.hasPendingToolResponse(messages)) {
                 precedingTools ?: tools
             } else if (purpose.allowsTools) {
                 toolsForRound?.invoke() ?: tools
@@ -101,16 +110,31 @@ internal class AgentLoop(
                 roundTools.optJSONObject(index)?.optJSONObject("function")?.optString("name")
             }
             publishTranscript()
-            if (purpose.allowsTools) context.compact()
-            val requestMessages = AssistantScreenContextProjection.project(
+            if (roundPurpose.allowsTools) context.compact()
+            val projectedMessages = AssistantScreenContextProjection.project(
                 roleplayContext?.projectMessages(messages) ?: messages,
             )
+            val requestMessages = if (finalizingResponse) JSONArray().also { copy ->
+                for (index in 0 until projectedMessages.length()) copy.put(projectedMessages.get(index))
+            } else projectedMessages
+            if (finalizingResponse) {
+                // A new user turn also ends Anthropic's signed thinking/tool turn before schemas change.
+                // Keep this internal instruction out of the transcript and persisted context.
+                requestMessages.put(AgentConversationCodec.userTextMessage(
+                    "手机操作会话已释放。请现在根据原始任务、已经取得的工具观察和最后一次截图，直接回答用户。" +
+                        "这是只输出文字的收尾回合，不得再调用任何工具。读取或查询任务必须给出实际看到的标题、文字、条目或内容摘要，" +
+                        "不能只说‘已读取’或‘已完成’；只写观察支持的内容，看不清或尚未取得的信息应明确说明，禁止编造。" +
+                        "执行类任务说明已观察到的结果和未验证的部分，finish本身不证明外部任务成功。" +
+                        "当前回复将附上 ${replyImages.size} 张已选控屏截图，由宿主直接展示，无需生成图片链接或文件路径。" +
+                        "用户授权读取的应用内容应按其请求回复到当前聊天；工具的sensitive标记仅限制原始数据存档，不是拒绝向该用户报告读取结果的理由。",
+                ))
+            }
             var roundInputTokens: Int? = null
             val reasoningLengthBeforeRound = accumulatedReasoning.length
             val completedRound = try {
                 modelRetry.complete(
                     initialRound = round,
-                    request = ProviderRequest(config, requestMessages, roundTools, sessionId, purpose),
+                    request = ProviderRequest(config, requestMessages, roundTools, sessionId, roundPurpose),
                     provider = provider,
                     controller = runController,
                     onEvent = { event ->
@@ -118,8 +142,11 @@ internal class AgentLoop(
                         onEvent(event)
                     },
                     onProviderEvent = { attemptRound, providerEvent ->
-                        if (!purpose.allowsTools && (providerEvent is ProviderEvent.HostedToolStarted ||
+                        if (!roundPurpose.allowsTools && (providerEvent is ProviderEvent.HostedToolStarted ||
                                 providerEvent is ProviderEvent.BlockStart && providerEvent.kind == AssistantBlockKind.TOOL_CALL)) {
+                            if (finalizingResponse) throw AgentModelFailure(
+                                "TOOL_SUMMARY_TOOL_CALL", false, "整理手机观察结果时模型仍请求工具，已停止；手机会话已释放。",
+                            )
                             throw AgentModelFailure("REPLY_REWRITE_TOOL_CALL", false, "改写回复时模型请求了工具，已停止；原回复未改变。")
                         }
                         if (providerEvent is ProviderEvent.Usage) {
@@ -148,7 +175,12 @@ internal class AgentLoop(
             runController.throwIfCancelled()
             val assistantMessage = providerResponse.assistantMessage
             val toolCalls = AgentConversationCodec.parseToolCalls(assistantMessage)
-            if (!purpose.allowsTools && toolCalls.isNotEmpty()) {
+            if (finalizingResponse && (toolCalls.isNotEmpty() || providerResponse.stopReason != AssistantStopReason.END_TURN)) {
+                throw AgentModelFailure(
+                    "TOOL_SUMMARY_INCOMPLETE", false, "模型未返回完整的手机观察总结；手机会话已释放，未执行后续工具。",
+                )
+            }
+            if (!roundPurpose.allowsTools && toolCalls.isNotEmpty()) {
                 throw AgentModelFailure("REPLY_REWRITE_TOOL_CALL", false, "改写回复时模型请求了工具，已停止；原回复未改变。")
             }
             if (purpose == ProviderRequestPurpose.REPLY_REWRITE && providerResponse.stopReason != AssistantStopReason.END_TURN) {
@@ -178,8 +210,11 @@ internal class AgentLoop(
             )
 
             if (toolCalls.isNotEmpty()) {
+                var stopMessage: String? = null
                 val outcomes = toolCalls.map { call ->
-                    val outcome = when (providerResponse.stopReason) {
+                    val outcome = if (stopMessage != null || finalizingResponse) {
+                        rejectedToolOutcome(round, call, "RUN_STOPPED", "本次运行已停止，后续工具未执行。")
+                    } else when (providerResponse.stopReason) {
                         AssistantStopReason.TOOL_USE -> executeTool(round, call)
                         AssistantStopReason.OUTPUT_LIMIT -> rejectedToolOutcome(
                             round, call, "TRUNCATED_TOOL_CALL",
@@ -190,9 +225,25 @@ internal class AgentLoop(
                             "模型在 ${providerResponse.stopReason.name} 终止状态下返回了工具调用；本批调用未执行，请重新规划。",
                         )
                     }
+                    if (stopMessage == null) stopMessage = outcome.result.stopMessage
+                    if (outcome.result.finalizeResponse) finalizingResponse = true
+                    outcome.result.replyImages.forEach { image -> replyImages.putIfAbsent(image.reference, image) }
                     appendMessage(AgentConversationCodec.toolResultMessage(outcome.call, outcome.result))
                     publishTranscript()
                     outcome
+                }
+                stopMessage?.let { message ->
+                    appendMessage(JSONObject().put("role", "assistant").put("content", message))
+                    publishTranscript()
+                    if (purpose.allowsTools) context.compact(final = true)
+                    onEvent(AgentEvent.RunFinished(round = round, contentChars = message.length))
+                    return Result(
+                        message, reasoningSnapshot(), sensitiveToolCallIds.toSet(),
+                        // Only explicit diagnostic evidence from the stopping tool may be delivered.
+                        // Do not publish screenshots accumulated by an unfinished/failed task.
+                        replyImages = outcomes.firstOrNull { it.result.stopMessage != null }
+                            ?.result?.replyImages.orEmpty(),
+                    )
                 }
                 appendToolImages(round, outcomes)
                 publishTranscript()
@@ -203,7 +254,7 @@ internal class AgentLoop(
             publishTranscript()
 
             // assistant 已自然结束时再检查 steering。这样补充消息不会丢掉刚完成的回答。
-            if (purpose.allowsTools && appendPendingSteeringOrSeal()) {
+            if (roundPurpose.allowsTools && appendPendingSteeringOrSeal()) {
                 round += 1
                 continue
             }
@@ -215,12 +266,13 @@ internal class AgentLoop(
             }
 
             publishTranscript()
-            if (purpose.allowsTools) context.compact(final = true)
+            if (roundPurpose.allowsTools) context.compact(final = true)
             onEvent(AgentEvent.RunFinished(round = round, contentChars = content.length))
             return Result(
                 content = content,
                 reasoningContent = reasoningSnapshot(),
                 sensitiveToolCallIds = sensitiveToolCallIds.toSet(),
+                replyImages = replyImages.values.toList(),
             )
         }
     }

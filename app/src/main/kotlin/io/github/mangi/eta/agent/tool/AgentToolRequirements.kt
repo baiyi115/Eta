@@ -31,7 +31,7 @@ internal object AgentToolRequirements {
         register(
             RootRequirement.NONE,
             "get_current_context", "search_apps", "launch_app", "open_uri", "browser_use", "web_search", "fetch_url",
-            "observe_screen", "tap", "tap_area", "tap_element", "long_press",
+            "phone_use", "observe_screen", "tap", "tap_area", "tap_element", "long_press",
             "long_press_element", "swipe", "scroll", "scroll_element", "type_text", "input_text",
             "replace_text", "clear_text", "set_clipboard", "get_clipboard", "paste_text",
             "wait", "wait_for_text", "wait_for_package", "open_system_panel",
@@ -50,7 +50,7 @@ internal object AgentToolRequirements {
         )
         register(
             RootRequirement.REQUIRED,
-            "top_memory_apps", "top_storage_apps", "wifi_credentials", "read_sms_code",
+            "background_phone_use", "top_memory_apps", "top_storage_apps", "wifi_credentials", "read_sms_code",
             "get_logcat", "set_setting", "set_device_state", "app_state_control",
             "list_alarms", "list_active_timers", "get_health_summary", "search_clipboard_history",
             "search_media", "search_audio", "search_recordings", "search_files",
@@ -73,6 +73,9 @@ internal object AgentToolRequirements {
             "replace_text", "clear_text", "paste_text", "press_key", "open_system_panel",
             "wait_for_text", "wait_for_package",
         ).forEach { name -> put(name, getValue(name).copy(accessibility = true)) }
+        listOf("phone_use", "background_phone_use").forEach { name ->
+            put(name, getValue(name).copy(accessibility = true))
+        }
         mapOf(
             "recent_notifications" to ToolSystemAccess.NOTIFICATIONS,
             "search_notification_history" to ToolSystemAccess.NOTIFICATIONS,

@@ -893,6 +893,100 @@ class AgentModelClientLoopTest {
         assertEquals(1, events.filterIsInstance<AgentEvent.ToolStarted>().size)
     }
 
+    @Test
+    fun trustedToolStopRecordsWholeBatchAndPreventsFurtherActionsOrModelRequests() {
+        val evidence = AgentModelClient.ModelImage("data:image/png;base64,ZmFpbHVyZQ==", "image/png", 7, 2, 2)
+        val provider = ScriptedProvider(assistant(finishReason = "tool_calls", toolCalls = listOf(
+            toolCall("phone", "phone_use", "{}"), toolCall("later", "launch_app", "{}"),
+        )))
+        val messages = JSONArray().put(AgentConversationCodec.userTextMessage("开始"))
+        val executed = mutableListOf<String>()
+        val events = mutableListOf<AgentEvent>()
+        val result = AgentLoop(
+            config = modelConfig(), messages = messages,
+            tools = AgentToolCatalog.build(terminalTools = false, browserTools = false), provider = provider,
+            toolExecutor = AgentModelClient.ToolExecutor {
+                executed += it.id
+                AgentModelClient.ToolResult("{\"ok\":false}", sensitive = true, stopMessage = "请用户接管", replyImages = listOf(evidence))
+            }, runController = AgentRunController(), traceFormatter = AgentTraceFormatter(), onEvent = events::add,
+        ).run()
+        assertEquals(listOf("phone"), executed)
+        assertEquals(1, provider.requests.size)
+        assertEquals("请用户接管", result.content)
+        assertEquals(listOf(evidence), result.replyImages)
+        val results = (0 until messages.length()).map(messages::getJSONObject).filter { it.optString("role") == "tool" }
+        assertEquals(listOf("phone", "later"), results.map { it.getString("tool_call_id") })
+        assertTrue(results.last().getString("content").contains("RUN_STOPPED"))
+        assertEquals(1, events.filterIsInstance<AgentEvent.RunFinished>().size)
+    }
+
+    @Test
+    fun trustedToolFinishSynthesizesObservedContentWithoutFurtherTools() {
+        val image = AgentModelClient.ModelImage("data:image/png;base64,ZmluYWw=", "image/png", 5, 2, 2)
+        val controller = AgentRunController()
+        val provider = ScriptedProvider(listOf(
+            { _, _ -> assistant(finishReason = "tool_calls", toolCalls = listOf(
+                toolCall("phone", "phone_use", "{}"), toolCall("later", "launch_app", "{}"),
+            )) },
+            { request, run ->
+                assertEquals(ProviderRequestPurpose.TOOL_SUMMARY, request.purpose)
+                assertEquals(0, request.tools.length())
+                assertEquals(0, request.effectiveTools.length())
+                assertFalse(request.effectiveConfig.hostedWebSearchEnabled)
+                assertTrue(request.messages.toString().contains("data:image/png;base64,ZmluYWw="))
+                assertTrue(request.messages.toString().contains("可见笔记标题"))
+                assertTrue(request.messages.toString().contains("列出标题"))
+                assertFalse(run.steer("再次点击"))
+                assistant(content = "首页可见笔记标题：周末徒步。", finishReason = "stop")
+            },
+        ))
+        val messages = JSONArray().put(AgentConversationCodec.userTextMessage("读取首页并告诉我内容"))
+        val executed = mutableListOf<String>()
+        val events = mutableListOf<AgentEvent>()
+        val result = AgentLoop(
+            config = modelConfig().copy(hostedWebSearchEnabled = true), messages = messages,
+            tools = AgentToolCatalog.build(terminalTools = false, browserTools = false), provider = provider,
+            toolExecutor = AgentModelClient.ToolExecutor {
+                executed += it.id
+                assertTrue(controller.steer("列出标题"))
+                AgentModelClient.ToolResult(
+                    "{\"ok\":true,\"observation\":\"可见笔记标题：周末徒步\"}", listOf(image),
+                    sensitive = true, finalizeResponse = true,
+                )
+            }, runController = controller, traceFormatter = AgentTraceFormatter(), onEvent = events::add,
+        ).run()
+        assertEquals(listOf("phone"), executed)
+        assertEquals(2, provider.requests.size)
+        assertEquals("首页可见笔记标题：周末徒步。", result.content)
+        assertTrue(messages.toString().contains("RUN_STOPPED"))
+        assertFalse(messages.toString().contains("data:image/png"))
+        assertFalse(messages.toString().contains("这是只输出文字的收尾回合"))
+        assertEquals(setOf("phone"), result.sensitiveToolCallIds)
+        assertEquals(1, events.filterIsInstance<AgentEvent.RunFinished>().size)
+    }
+
+    @Test
+    fun summaryRoundCannotDispatchAnotherTool() {
+        val provider = ScriptedProvider(
+            assistant(finishReason = "tool_calls", toolCalls = listOf(toolCall("phone", "phone_use", "{}"))),
+            assistant(finishReason = "tool_calls", toolCalls = listOf(toolCall("later", "launch_app", "{}"))),
+        )
+        val executed = mutableListOf<String>()
+        val failure = assertThrows(AgentModelFailure::class.java) {
+            AgentLoop(
+                config = modelConfig(), messages = JSONArray().put(AgentConversationCodec.userTextMessage("读取首页")),
+                tools = AgentToolCatalog.build(terminalTools = false, browserTools = false), provider = provider,
+                toolExecutor = AgentModelClient.ToolExecutor {
+                    executed += it.id
+                    AgentModelClient.ToolResult("{}", finalizeResponse = true)
+                }, runController = AgentRunController(), traceFormatter = AgentTraceFormatter(), onEvent = {},
+            ).run()
+        }
+        assertEquals("TOOL_SUMMARY_INCOMPLETE", failure.code)
+        assertEquals(listOf("phone"), executed)
+        assertEquals(2, provider.requests.size)
+    }
+
     private class ScriptedProvider(
         private val responses: List<(ProviderRequest, AgentRunController) -> JSONObject>,
     ) : AgentProviderClient {
