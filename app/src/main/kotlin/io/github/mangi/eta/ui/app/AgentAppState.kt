@@ -1856,6 +1856,7 @@ internal class AgentAppState(
                     AgentRunMessageProjector.applyResult(
                         runId, messages, result.content, notice,
                         detail = result.error.takeIf { notice == SystemNoticeCode.RuntimeFailed },
+                        images = result.replyImages.takeIf { result.ok }.orEmpty(),
                     )
                 }
             }

@@ -307,6 +307,10 @@ internal class AgentRuntimeRunExecutor(
                 runId = request.runId,
                 ok = true,
                 content = completedResponse.content,
+                replyImages = completedResponse.replyImages.map { image ->
+                    require(image.reference.startsWith("data:image/")) { "回复截图必须为已读取的图片数据" }
+                    image.reference
+                },
                 reasoningContent = completedResponse.reasoningContent,
                 transcript = completedResponse.transcript,
                 contextSnapshot = completedResponse.contextSnapshot?.copy(operationId = request.runId),

@@ -103,8 +103,11 @@ internal object ConversationMarkdownExporter {
             }
         }
 
-        is AgentMessageUi -> content.takeIf { it.isNotBlank() }
-            ?.let { "## ${labels.assistant}\n\n$it" }
+        is AgentMessageUi -> buildString {
+            if (content.isBlank() && images.isEmpty()) return@buildString
+            append("## ").append(labels.assistant).append("\n\n").append(content)
+            if (images.isNotEmpty()) append("\n\n_").append(labels.imagesFormat.format(images.size)).append('_')
+        }.takeIf { it.isNotBlank() }
 
         is ThinkingMessageUi -> content.takeIf { it.isNotBlank() }
             ?.let { "<details>\n<summary>${labels.thinking}</summary>\n\n$it\n\n</details>" }

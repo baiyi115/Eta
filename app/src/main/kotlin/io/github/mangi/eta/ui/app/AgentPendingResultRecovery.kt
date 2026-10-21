@@ -84,6 +84,7 @@ internal object AgentPendingResultRecovery {
                     },
                     isStreaming = false,
                     renderMarkdown = true,
+                    images = result.replyImages,
                 )
                 result.ok -> SystemNoticeMessageUi(
                     id = resultId,

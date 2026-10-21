@@ -413,6 +413,7 @@ internal object AgentConversationStore {
                         sortIndex = sortIndex,
                         type = TYPE_ASSISTANT,
                         content = content,
+                        imagesJson = images.toJsonArrayString(),
                         renderMarkdown = renderMarkdown,
                         contextTokens = usage?.contextTokens,
                         inputTokens = usage?.inputTokens,
@@ -480,6 +481,7 @@ internal object AgentConversationStore {
             TYPE_ASSISTANT -> AgentMessageUi(
                 id = id,
                 content = content,
+                images = imagesJson.toStringList(),
                 isStreaming = false,
                 renderMarkdown = renderMarkdown ?: true,
                 usage = TokenUsageUi(

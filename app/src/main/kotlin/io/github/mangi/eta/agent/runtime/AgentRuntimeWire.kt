@@ -21,6 +21,7 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.Serializable
 import java.io.File
 import kotlinx.serialization.json.Json
+import org.json.JSONArray
 
 /**
  * AgentRuntime 跨进程通信协议。
@@ -222,7 +223,13 @@ internal object AgentRuntimeWire {
         val contextSnapshotRef: String = "",
         val operation: String = OP_CHAT,
         val rewriteTargetMessageId: String? = null,
+        /** User-visible data URLs; full results cross Binder through AgentWireText's file descriptor. */
+        val replyImages: List<String> = emptyList(),
     )
+
+    internal fun replyImagesFromJson(raw: String): List<String> = JSONArray(raw).let { images ->
+        (0 until images.length()).map { images.getString(it) }.filter { it.startsWith("data:image/") }
+    }
 
     data class EntryHandoff(
         val id: String,

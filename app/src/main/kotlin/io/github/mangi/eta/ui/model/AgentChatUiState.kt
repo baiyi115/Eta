@@ -66,6 +66,7 @@ data class AgentMessageUi(
     val characterEditable: Boolean = false,
     val candidateCount: Int = 1,
     val selectedCandidate: Int = 0,
+    val images: List<String> = emptyList(),
 ) : AgentChatMessageUi
 
 enum class SystemNoticeCode(val wireValue: String) {

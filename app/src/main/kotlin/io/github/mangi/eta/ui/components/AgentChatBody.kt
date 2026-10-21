@@ -185,7 +185,7 @@ internal fun AgentChatBody(
             messages = messages,
             targetMessageId = messageEdit?.takeUnless { it.preserveFollowingMessages }?.targetMessageId,
         ).filterNot { message ->
-            message is AgentMessageUi && message.content.isBlank()
+            message is AgentMessageUi && message.content.isBlank() && message.images.isEmpty()
         }
     }
     val currentBrowserMessageId = remember(

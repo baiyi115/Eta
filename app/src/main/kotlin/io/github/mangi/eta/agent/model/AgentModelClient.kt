@@ -243,6 +243,7 @@ internal object AgentModelClient {
         }
         return ModelResponse.Text(
             content = result.content,
+            replyImages = result.replyImages,
             contextSnapshot = if (rewriteReply) null else loop.contextSnapshot(),
             reasoningContent = result.reasoningContent,
             transcript = AgentConversationCodec.transcript(
@@ -387,6 +388,7 @@ internal object AgentModelClient {
             val reasoningContent: String = "",
             val transcript: List<ConversationMessage> = emptyList(),
             val contextSnapshot: AgentContextSnapshot? = null,
+            val replyImages: List<ModelImage> = emptyList(),
         ) : ModelResponse
     }
 

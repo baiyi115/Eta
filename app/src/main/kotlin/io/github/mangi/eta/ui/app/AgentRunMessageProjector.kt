@@ -649,12 +649,13 @@ internal class AgentRunMessageProjector(
             content: String,
             notice: SystemNoticeCode?,
             detail: String? = null,
+            images: List<String> = emptyList(),
         ): List<AgentChatMessageUi> {
             val targetIndex = resultTargetIndex(runId, messages)
             if (targetIndex < 0) {
                 val id = resultFallbackId(runId, messages)
                 return messages + if (notice == null) {
-                    AgentMessageUi(id = id, content = content, isStreaming = false, renderMarkdown = true)
+                    AgentMessageUi(id = id, content = content, isStreaming = false, renderMarkdown = true, images = images)
                 } else {
                     SystemNoticeMessageUi(id, notice, detail)
                 }
@@ -667,6 +668,7 @@ internal class AgentRunMessageProjector(
                 } ?: 0
                 target.copy(
                     content = if (sameRoundBlocks <= 1) content else target.content.ifBlank { content },
+                    images = images,
                     isStreaming = false,
                     renderMarkdown = true,
                 )

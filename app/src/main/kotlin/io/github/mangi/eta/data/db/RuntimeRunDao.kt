@@ -11,6 +11,7 @@ import androidx.room.Upsert
 internal interface RuntimeRunDao : ChunkedTextDao {
     suspend fun restoreRuntimeResult(row: RuntimeResultEntity): RuntimeResultEntity = row.copy(
         content = restoreText("runtime_results", row.runId, "content", row.content),
+        replyImagesJson = restoreText("runtime_results", row.runId, "replyImagesJson", row.replyImagesJson),
         reasoningContent = restoreText("runtime_results", row.runId, "reasoningContent", row.reasoningContent),
         transcriptJson = restoreText("runtime_results", row.runId, "transcriptJson", row.transcriptJson),
         contextSnapshotJson = restoreText("runtime_results", row.runId, "contextSnapshotJson", row.contextSnapshotJson),
@@ -18,6 +19,7 @@ internal interface RuntimeRunDao : ChunkedTextDao {
 
     suspend fun restoreArchivedRun(row: RuntimeArchiveRunEntity): RuntimeArchiveRunEntity = row.copy(
         content = restoreText("runtime_archive_runs", row.archiveRunId, "content", row.content),
+        replyImagesJson = restoreText("runtime_archive_runs", row.archiveRunId, "replyImagesJson", row.replyImagesJson),
         reasoningContent = restoreText("runtime_archive_runs", row.archiveRunId, "reasoningContent", row.reasoningContent),
         transcriptJson = restoreText("runtime_archive_runs", row.archiveRunId, "transcriptJson", row.transcriptJson),
         contextSnapshotJson = restoreText("runtime_archive_runs", row.archiveRunId, "contextSnapshotJson", row.contextSnapshotJson),
@@ -73,6 +75,7 @@ internal interface RuntimeRunDao : ChunkedTextDao {
     suspend fun upsertRuntimeResult(result: RuntimeResultEntity) {
         upsertRuntimeResultRow(result.copy(
             content = storeText("runtime_results", result.runId, "content", result.content),
+            replyImagesJson = storeText("runtime_results", result.runId, "replyImagesJson", result.replyImagesJson),
             reasoningContent = storeText("runtime_results", result.runId, "reasoningContent", result.reasoningContent),
             transcriptJson = storeText("runtime_results", result.runId, "transcriptJson", result.transcriptJson),
             contextSnapshotJson = storeText("runtime_results", result.runId, "contextSnapshotJson", result.contextSnapshotJson),
@@ -121,6 +124,7 @@ internal interface RuntimeRunDao : ChunkedTextDao {
     suspend fun upsertArchivedRun(run: RuntimeArchiveRunEntity) {
         upsertArchivedRunRow(run.copy(
             content = storeText("runtime_archive_runs", run.archiveRunId, "content", run.content),
+            replyImagesJson = storeText("runtime_archive_runs", run.archiveRunId, "replyImagesJson", run.replyImagesJson),
             reasoningContent = storeText("runtime_archive_runs", run.archiveRunId, "reasoningContent", run.reasoningContent),
             transcriptJson = storeText("runtime_archive_runs", run.archiveRunId, "transcriptJson", run.transcriptJson),
             contextSnapshotJson = storeText("runtime_archive_runs", run.archiveRunId, "contextSnapshotJson", run.contextSnapshotJson),
