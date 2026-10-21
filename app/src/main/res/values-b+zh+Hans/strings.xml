@@ -473,11 +473,14 @@
   <plurals name="tool_group_calls">
     <item quantity="other">%d 次</item>
   </plurals>
-  <plurals name="work_summary_thinking">
-    <item quantity="other">思考 %d 次</item>
-  </plurals>
   <plurals name="work_summary_tools">
-    <item quantity="other">调用 %d 个工具</item>
+    <item quantity="other">调用 %d 次工具</item>
+  </plurals>
+  <plurals name="work_summary_files">
+    <item quantity="other">修改 %d 个文件</item>
+  </plurals>
+  <plurals name="work_summary_commands">
+    <item quantity="other">执行 %d 条命令</item>
   </plurals>
   <plurals name="work_summary_failed">
     <item quantity="other">%d 个失败</item>

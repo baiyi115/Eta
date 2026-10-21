@@ -419,6 +419,10 @@ internal class AgentRunMessageProjector(
                     status = status,
                     resultSummary = event.resultSummary,
                     imageCount = event.imageCount,
+                    modifiedFileKeys = event.modifiedFileKey
+                        ?.takeIf { it !in message.modifiedFileKeys }
+                        ?.let { message.modifiedFileKeys + it }
+                        ?: message.modifiedFileKeys,
                 )
             } else {
                 message

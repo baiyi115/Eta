@@ -461,11 +461,14 @@
   <plurals name="tool_group_calls">
     <item quantity="other">%d 次</item>
   </plurals>
-  <plurals name="work_summary_thinking">
-    <item quantity="other">思考 %d 次</item>
-  </plurals>
   <plurals name="work_summary_tools">
-    <item quantity="other">呼叫 %d 個工具</item>
+    <item quantity="other">呼叫 %d 次工具</item>
+  </plurals>
+  <plurals name="work_summary_files">
+    <item quantity="other">修改 %d 個檔案</item>
+  </plurals>
+  <plurals name="work_summary_commands">
+    <item quantity="other">執行 %d 條指令</item>
   </plurals>
   <plurals name="work_summary_failed">
     <item quantity="other">%d 個失敗</item>

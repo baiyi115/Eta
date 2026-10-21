@@ -153,6 +153,8 @@ data class ToolActivityMessageUi(
     val command: String? = null,
     val resultSummary: String? = null,
     val imageCount: Int = 0,
+    /** 成功写入或编辑的路径指纹；历史消息按指纹去重得到修改文件数。 */
+    val modifiedFileKeys: List<String> = emptyList(),
 ) : AgentChatMessageUi
 
 enum class ToolActivityStatusUi {

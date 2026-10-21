@@ -1,6 +1,7 @@
 package io.github.mangi.eta.agent.model
 
 import java.net.URI
+import java.security.MessageDigest
 import java.util.Locale
 import org.json.JSONObject
 
@@ -86,6 +87,22 @@ internal class AgentTraceFormatter {
         } else {
             null
         }
+
+    /** 文件修改成功后才返回规范路径指纹，避免为计数把完整本地路径写入会话。 */
+    fun modifiedFileKey(
+        toolName: String,
+        result: AgentModelClient.ToolResult,
+    ): String? {
+        if (toolName !in FILE_MUTATION_TOOL_NAMES || !isSuccessResult(result)) return null
+        val path = parseResultJson(result)
+            ?.optString("path")
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() && it.length <= MAX_MODIFIED_FILE_PATH_CHARS }
+            ?: return null
+        return MessageDigest.getInstance("SHA-256")
+            .digest(path.toByteArray(Charsets.UTF_8))
+            .joinToString(separator = "") { byte -> "%02x".format(byte.toInt() and 0xff) }
+    }
 
     private fun String.redactDisplaySecrets(): String =
         replace(SENSITIVE_ASSIGNMENT) { match ->
@@ -620,6 +637,8 @@ internal class AgentTraceFormatter {
         const val MAX_LISTED_APP_NAMES = 3
         const val MAX_TERMINAL_PREVIEW_LINES = 3
         const val MAX_TERMINAL_PREVIEW_CHARS = 240
+        const val MAX_MODIFIED_FILE_PATH_CHARS = 4_096
+        val FILE_MUTATION_TOOL_NAMES = setOf("write_file", "edit_file")
         val SENSITIVE_ASSIGNMENT = Regex(
             """(?i)\b([A-Z0-9_]*(?:API[_-]?KEY|ACCESS[_-]?TOKEN|AUTH[_-]?TOKEN|TOKEN|PASSWORD|PASSWD|SECRET)[A-Z0-9_]*)\s*=\s*(?:"[^"]*"|'[^']*'|[^\s;&|]+)"""
         )

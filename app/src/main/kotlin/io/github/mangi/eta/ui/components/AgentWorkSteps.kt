@@ -60,16 +60,25 @@ private val UNGROUPED_TOOLS = setOf("browser_use")
 
 /** 折叠后的工作过程摘要所需计数。 */
 internal data class AgentWorkSummary(
-    val thinkingCount: Int,
     val toolCount: Int,
+    val modifiedFileCount: Int,
+    val commandCount: Int,
     val failedCount: Int,
 )
 
-internal fun List<AgentChatMessageUi>.workSummary(): AgentWorkSummary = AgentWorkSummary(
-    thinkingCount = count { it is ThinkingMessageUi },
-    toolCount = count { it is ToolActivityMessageUi },
-    failedCount = count { it is ToolActivityMessageUi && it.status == ToolActivityStatusUi.Failed },
-)
+internal fun List<AgentChatMessageUi>.workSummary(): AgentWorkSummary {
+    val tools = filterIsInstance<ToolActivityMessageUi>()
+    return AgentWorkSummary(
+        toolCount = tools.size,
+        modifiedFileCount = tools
+            .filter { it.status == ToolActivityStatusUi.Success }
+            .flatMap { it.modifiedFileKeys }
+            .toSet()
+            .size,
+        commandCount = tools.count { it.command != null },
+        failedCount = tools.count { it.status == ToolActivityStatusUi.Failed },
+    )
+}
 
 /**
  * 折叠行下方的一行结果。成功的常态结果（如“完成”）不占行；终端输出取最后一行，

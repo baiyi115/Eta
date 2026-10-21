@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="work_in_progress">正在工作</string>
+    <string name="work_history_expanded">已展开全部工作过程</string>
+    <string name="work_latest_only">仅显示最新一步</string>
+    <string name="work_history_folded">工作过程已收起</string>
+</resources>

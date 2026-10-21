@@ -486,13 +486,17 @@
     <item quantity="one">%d call</item>
     <item quantity="other">%d calls</item>
   </plurals>
-  <plurals name="work_summary_thinking">
-    <item quantity="one">Thought %d time</item>
-    <item quantity="other">Thought %d times</item>
-  </plurals>
   <plurals name="work_summary_tools">
     <item quantity="one">%d tool call</item>
     <item quantity="other">%d tool calls</item>
+  </plurals>
+  <plurals name="work_summary_files">
+    <item quantity="one">%d file changed</item>
+    <item quantity="other">%d files changed</item>
+  </plurals>
+  <plurals name="work_summary_commands">
+    <item quantity="one">%d command run</item>
+    <item quantity="other">%d commands run</item>
   </plurals>
   <plurals name="work_summary_failed">
     <item quantity="one">%d failed</item>

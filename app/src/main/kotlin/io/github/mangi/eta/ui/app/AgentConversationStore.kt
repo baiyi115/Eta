@@ -455,6 +455,7 @@ internal object AgentConversationStore {
                 argumentsSummary = argumentsSummary,
                 resultSummary = resultSummary,
                 imageCount = imageCount,
+                toolsJson = modifiedFileKeys.toJsonArrayString(),
             )
 
             is ToolSummaryMessageUi -> ConversationMessageEntity(
@@ -518,6 +519,7 @@ internal object AgentConversationStore {
                 command = content.takeIf(String::isNotBlank),
                 resultSummary = resultSummary,
                 imageCount = imageCount,
+                modifiedFileKeys = toolsJson.toStringList(),
             )
 
             TYPE_TOOL_SUMMARY -> ToolSummaryMessageUi(

@@ -741,6 +741,7 @@ internal object AgentRuntimeWire {
                 putInt("image_count", event.imageCount)
                 putInt("image_bytes", event.imageBytes)
                 event.success?.let { putBoolean("success", it) }
+                event.modifiedFileKey?.let { putString("modified_file_key", it) }
             }
 
             is AgentEvent.HostedToolStarted -> {
@@ -883,6 +884,8 @@ internal object AgentRuntimeWire {
             imageBytes = bundle.getInt("image_bytes"),
             // 旧版本 Runtime 不发送 success，缺省为 null 由消费端回退判断
             success = if (bundle.containsKey("success")) bundle.getBoolean("success") else null,
+            modifiedFileKey = bundle.getString("modified_file_key")
+                ?.takeIf(String::isNotBlank),
         )
 
         "hosted_tool_started" -> AgentEvent.HostedToolStarted(

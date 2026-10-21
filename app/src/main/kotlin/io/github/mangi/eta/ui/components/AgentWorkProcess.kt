@@ -35,6 +35,7 @@ import androidx.compose.material.icons.rounded.Checklist
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Lightbulb
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -56,12 +57,14 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import io.github.mangi.eta.R
-import io.github.mangi.eta.agent.overlay.toolDisplayName
 import io.github.mangi.eta.ui.markdown.StreamingMarkdownState
 import io.github.mangi.eta.ui.model.AgentChatMessageUi
 import io.github.mangi.eta.ui.model.ThinkingMessageUi
@@ -73,8 +76,9 @@ import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /**
- * 把连续的思考与工具调用收束为一条可展开的工作过程：折叠时只是一行摘要，展开后是
- * 左侧带连线的时间线。工作过程与正文同样不加卡片外壳，让最终回答保持视觉主角。
+ * 工作过程中默认只展示最新一条思考或工具，历史按需展开；结束后默认只留摘要。
+ * 展开后仍是完整的分组时间线。这里只裁剪展示，不删除消息或改变模型上下文。
+ * 工作过程与正文同样不加卡片外壳，让最终回答保持视觉主角。
  */
 @Composable
 internal fun AgentWorkProcess(
@@ -91,14 +95,29 @@ internal fun AgentWorkProcess(
         (message is ThinkingMessageUi && message.isStreaming) ||
             (message is ToolActivityMessageUi && message.status == ToolActivityStatusUi.Running)
     }
-    val steps = remember(messages) { messages.toWorkSteps() }
-    // null 表示自动模式；用户点过之后只认手动选择。
-    var manualExpanded by rememberSaveable(id) { mutableStateOf<Boolean?>(null) }
-
-    // 以“是否仍是本轮末尾的工作过程”判定收起，而不是 running：思考结束到工具开始之间
-    // running 会短暂为 false，按它收起会造成反复开合。展开态在组合期同步推导，与正文
-    // 条目插入落在同一帧，不经 LaunchedEffect 晚一帧收起。语音浮层空间有限，自动模式不展开。
-    val bodyVisible = manualExpanded ?: (active && !assistantOverlay)
+    // 默认不展开历史；本轮任务结束后自动收起，历史记录仍可再次手动展开。
+    var expanded by rememberSaveable(id) { mutableStateOf(false) }
+    var wasActive by remember(id) { mutableStateOf(active) }
+    LaunchedEffect(active) {
+        if (wasActive && !active) expanded = false
+        wasActive = active
+    }
+    // active 覆盖思考结束到下一工具开始之间的空档，避免依赖 running 造成反复开合。
+    // 语音浮层也只展示最新一步，不再自动展开整段时间线。
+    val showingLatest = active && !expanded
+    val steps = remember(messages, expanded, active) {
+        when {
+            expanded -> messages.toWorkSteps()
+            active -> {
+                // ToolSummary 是批次摘要；有真实思考/工具记录时不要让摘要遮住最新步骤。
+                val latest = messages.lastOrNull { it is ThinkingMessageUi || it is ToolActivityMessageUi }
+                    ?: messages.lastOrNull()
+                latest?.let { listOf(AgentWorkStep.Single(it)) }.orEmpty()
+            }
+            else -> emptyList()
+        }
+    }
+    val bodyVisible = expanded || showingLatest
 
     Column(
         modifier = modifier
@@ -108,8 +127,9 @@ internal fun AgentWorkProcess(
         AgentWorkHeader(
             messages = messages,
             working = active || running,
-            expanded = bodyVisible,
-            onClick = { manualExpanded = !bodyVisible },
+            expanded = expanded,
+            showingLatest = showingLatest,
+            onClick = { expanded = !expanded },
         )
         AnimatedVisibility(
             visible = bodyVisible,
@@ -148,58 +168,72 @@ private fun AgentWorkHeader(
     messages: List<AgentChatMessageUi>,
     working: Boolean,
     expanded: Boolean,
+    showingLatest: Boolean,
     onClick: () -> Unit,
 ) {
-    val runningTool = messages.lastOrNull { message ->
-        message is ToolActivityMessageUi && message.status == ToolActivityStatusUi.Running
-    } as? ToolActivityMessageUi
     val summary = remember(messages) { messages.workSummary() }
-    val text = when {
-        runningTool != null -> pluralStringResource(
-            R.plurals.work_processing_step,
-            summary.toolCount,
-            summary.toolCount,
-        ) + " · " + runningTool.argumentsSummary.ifBlank { toolDisplayName(runningTool.toolName) }
-        working -> stringResource(R.string.work_analyzing)
-        else -> workSummaryText(summary)
+    val text = if (working) {
+        stringResource(R.string.work_in_progress)
+    } else {
+        workSummaryText(summary)
     }
+    val expandAction = stringResource(if (expanded) R.string.work_collapse else R.string.work_expand)
+    val expandedState = stringResource(
+        when {
+            expanded -> R.string.work_history_expanded
+            showingLatest -> R.string.work_latest_only
+            else -> R.string.work_history_folded
+        },
+    )
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(min = WorkRowHeight)
+            .heightIn(min = 48.dp)
             .clip(RoundedCornerShape(10.dp))
-            .clickable(onClick = onClick),
+            .clickable(role = Role.Button, onClickLabel = expandAction, onClick = onClick)
+            .semantics { stateDescription = expandedState },
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(modifier = Modifier.width(WorkGutterWidth), contentAlignment = Alignment.Center) {
             Icon(
                 imageVector = when {
-                    runningTool != null -> iconForTool(runningTool.toolName)
                     working -> Icons.Rounded.Lightbulb
                     else -> Icons.Rounded.Checklist
                 },
                 contentDescription = null,
                 modifier = Modifier.size(15.dp),
-                tint = if (working) {
-                    MiuixTheme.colorScheme.primary
-                } else {
-                    MiuixTheme.colorScheme.onSurfaceVariantSummary
+                tint = when {
+                    summary.failedCount > 0 -> StatusError
+                    working -> MiuixTheme.colorScheme.primary
+                    else -> MiuixTheme.colorScheme.onSurfaceVariantSummary
                 },
             )
         }
         Spacer(modifier = Modifier.width(WorkGutterGap))
-        ShimmerText(
-            text = text,
-            active = working,
-            style = MiuixTheme.textStyles.body2,
-            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-            modifier = Modifier.weight(1f, fill = false),
-        )
+        Column(modifier = Modifier.weight(1f)) {
+            ShimmerText(
+                text = text,
+                active = working,
+                style = MiuixTheme.textStyles.body2,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            )
+            // 历史折叠不隐藏失败：即使已开始下一步，摘要仍明确保留失败计数。
+            if (summary.failedCount > 0) {
+                Text(
+                    text = pluralStringResource(
+                        R.plurals.work_summary_failed,
+                        summary.failedCount,
+                        summary.failedCount,
+                    ),
+                    style = MiuixTheme.textStyles.footnote2,
+                    color = StatusError,
+                )
+            }
+        }
         ExpandChevron(
             expanded = expanded,
-            contentDescription = stringResource(
-                if (expanded) R.string.work_collapse else R.string.work_expand,
-            ),
+            // 整行已经提供按钮动作和展开状态，避免读屏重复播报装饰箭头。
+            contentDescription = null,
             modifier = Modifier.padding(start = 4.dp, end = 8.dp),
         )
     }
@@ -208,14 +242,10 @@ private fun AgentWorkHeader(
 @Composable
 private fun workSummaryText(summary: AgentWorkSummary): String {
     val parts = buildList {
-        if (summary.thinkingCount > 0) {
-            add(pluralStringResource(R.plurals.work_summary_thinking, summary.thinkingCount, summary.thinkingCount))
-        }
         if (summary.toolCount > 0) {
             add(pluralStringResource(R.plurals.work_summary_tools, summary.toolCount, summary.toolCount))
-        }
-        if (summary.failedCount > 0) {
-            add(pluralStringResource(R.plurals.work_summary_failed, summary.failedCount, summary.failedCount))
+            add(pluralStringResource(R.plurals.work_summary_files, summary.modifiedFileCount, summary.modifiedFileCount))
+            add(pluralStringResource(R.plurals.work_summary_commands, summary.commandCount, summary.commandCount))
         }
     }
     return parts.joinToString(" · ").ifEmpty { stringResource(R.string.work_completed) }

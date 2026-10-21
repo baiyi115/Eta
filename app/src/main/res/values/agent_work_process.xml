@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="work_in_progress">Working</string>
+    <string name="work_history_expanded">All work details expanded</string>
+    <string name="work_latest_only">Only the latest step is shown</string>
+    <string name="work_history_folded">Work details folded</string>
+</resources>
