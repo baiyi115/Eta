@@ -105,7 +105,7 @@ Chat Completions、Responses 与 Anthropic Messages 在 Provider 边界统一投
 
 Eta 直接作为 MCP 客户端连接远程 Streamable HTTP 服务器，不把协议能力绑定到某个模型 Provider。当前优先使用 `2026-07-28` 无状态协议，并兼容需要 `initialize` 与 session 的 `2025-11-25` 服务；只接入 `tools/list` 和 `tools/call`，暂不支持 Resources、Prompts、Tasks、stdio、OAuth、交互式补充输入或 Provider 托管 MCP。
 
-工具默认关闭，服务器也可整体停用。添加服务器时先发现并缓存工具目录，用户再逐项启用；未标记只读的工具需要额外确认。现代服务的目录按 `ttlMs` 到期并在下次 run 前刷新，legacy 目录由用户手动刷新。每次 run 开始时一并冻结启用目录与 Bearer Token，并生成带服务器命名空间的模型工具名，因此后续设置变化不会改变正在执行的 schema 或账户。Eta 不因 `$ref`、组合关键字、条件关键字等复杂 Schema 禁用工具，而是保留参数声明，由 Provider 适配其接口格式，实际参数交给 MCP 服务解释；现代 Streamable HTTP 的 `x-mcp-header` 参数会同步映射为请求头。
+添加服务器时先发现并缓存工具目录，首次发现的新工具默认全部启用；服务也可整体停用。刷新时保留已知工具的现有开关，服务端移除后重新出现的工具按新工具处理并默认启用，已手动关闭且持续存在的工具不会被自动重新打开。设置页支持单项启停和一键全部启用，工具说明默认收起，点按工具名称展开。添加服务器时显示统一的信任与外部数据变更提示，不再为非只读工具逐项弹出启用确认。现代服务的目录按 `ttlMs` 到期并在下次 run 前刷新，legacy 目录由用户手动刷新。每次 run 开始时一并冻结启用目录与 Bearer Token，并生成带服务器命名空间的模型工具名，因此后续设置变化不会改变正在执行的 schema 或账户。Eta 不因 `$ref`、组合关键字、条件关键字等复杂 Schema 禁用工具，而是保留参数声明，由 Provider 适配其接口格式，实际参数交给 MCP 服务解释；现代 Streamable HTTP 的 `x-mcp-header` 参数会同步映射为请求头。
 
 MCP 地址由用户直接配置，HTTP、HTTPS、局域网与本机地址使用同一条连接链路，并沿用共享 OkHttp 客户端的默认重定向和超时行为；HTTP 会明文传输 Token、工具参数和结果。Bearer Token 通过 Android Keystore 加密后保存在本机。MCP 原始参数与结果只在当前回合使用，持久 transcript、运行 checkpoint 和归档只保留脱敏记录；文本、结构化结果、图片、分页次数和单次 run 工具数仍有独立预算，不支持或超出预算的结果会携带明确标记。取消 run 会立即封闭新调用并关闭在途 HTTP 请求，legacy session 的释放只做异步 best-effort，不阻塞取消线程。
 

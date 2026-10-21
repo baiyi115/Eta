@@ -60,9 +60,7 @@ internal class McpRunSnapshot(
                     (configured.toolsExpireAt == null || configured.toolsExpireAt <= now)
                 val server = if (needsRefresh) {
                     runCatching {
-                        McpServerManager.discover(configured, bearerToken).also {
-                            McpServerRepository.update(it)
-                        }
+                        McpServerRepository.applyDiscovery(McpServerManager.discover(configured, bearerToken))
                     }.getOrNull()
                         ?: return@forEach
                 } else {

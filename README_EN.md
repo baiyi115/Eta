@@ -54,7 +54,7 @@ A task can combine these tools: read web sources and then organize files with a 
 - **Personal context:** retrieve notifications, app usage, and location on demand. Dedicated searches for photos, calendar events, SMS messages, recordings, health summaries, and chat images require root; some sources also depend on the ROM and installed apps.
 - **Long-term memory:** store context for future conversations in a local `MEMORY.md`. Core memory is included within a context budget, with the rest retrieved as needed. You can edit, clear, or disable it.
 - **Skills:** load task instructions, reference material, and script resources as needed. Install from public GitHub repositories or import a local ZIP. Installation does not run scripts or grant additional permissions.
-- **MCP:** connect remote tools over Streamable HTTP, with optional bearer-token authentication. Enable tools individually to use them alongside local tools.
+- **MCP:** connect remote tools over Streamable HTTP, with optional bearer-token authentication. Initially discovered and newly added tools are enabled by default. Disable tools individually or enable all at once; tap a tool name to expand its initially collapsed description.
 
 ### Agent runtime
 

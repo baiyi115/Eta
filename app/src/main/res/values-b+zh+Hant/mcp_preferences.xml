@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="mcp_tools_enabled_count">已啟用 %1$d / %2$d 個工具</string>
+    <string name="mcp_tools_defaults_hint">新工具預設啟用；點按名稱查看說明，右側開關控制啟停。</string>
+    <string name="mcp_enable_all_tools">全部啟用</string>
+    <string name="mcp_expand_tool_description">展開工具說明</string>
+    <string name="mcp_collapse_tool_description">收起工具說明</string>
+    <string name="mcp_description_expanded">說明已展開</string>
+    <string name="mcp_description_collapsed">說明已收起</string>
+    <string name="mcp_tool_switch_accessibility">啟用工具 %1$s</string>
+    <string name="mcp_tool_name_label">工具名稱：%1$s</string>
+    <string name="mcp_no_tool_description">伺服器未提供工具說明。</string>
+    <string name="mcp_tool_read_only_hint">伺服器宣告此工具唯讀，不代表安全保證。</string>
+    <string name="mcp_tool_selection_failed">工具設定更新失敗，請重試。</string>
+    <string name="mcp_tools_trust_notice">發現的工具預設全部啟用，可能修改資料或存取外部服務。請僅連線至可信伺服器，之後可單獨關閉工具。</string>
+</resources>

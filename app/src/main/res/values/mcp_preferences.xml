@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="mcp_tools_enabled_count">%1$d of %2$d tools enabled</string>
+    <string name="mcp_tools_defaults_hint">New tools default on. Tap a name for details; the switch controls availability.</string>
+    <string name="mcp_enable_all_tools">Enable all</string>
+    <string name="mcp_expand_tool_description">Expand tool details</string>
+    <string name="mcp_collapse_tool_description">Collapse tool details</string>
+    <string name="mcp_description_expanded">Details expanded</string>
+    <string name="mcp_description_collapsed">Details collapsed</string>
+    <string name="mcp_tool_switch_accessibility">Enable tool %1$s</string>
+    <string name="mcp_tool_name_label">Tool name: %1$s</string>
+    <string name="mcp_no_tool_description">No description provided by the server.</string>
+    <string name="mcp_tool_read_only_hint">The server declares this tool read-only; this is not a safety guarantee.</string>
+    <string name="mcp_tool_selection_failed">Unable to update tools. Please try again.</string>
+    <string name="mcp_tools_trust_notice">Discovered tools are enabled by default and may modify data or call external services. Connect only to trusted servers; tools can be disabled individually.</string>
+</resources>

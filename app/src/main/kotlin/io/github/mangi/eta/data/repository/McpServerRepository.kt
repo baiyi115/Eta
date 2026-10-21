@@ -9,8 +9,11 @@ import io.github.mangi.eta.data.model.McpServerSetting
 import java.util.UUID
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 internal object McpServerRepository {
+    private val toolSelectionMutex = Mutex()
     @Volatile
     private lateinit var applicationContext: Context
 
@@ -46,7 +49,12 @@ internal object McpServerRepository {
         return added
     }
 
-    suspend fun update(server: McpServerSetting, bearerToken: String? = null) {
+    suspend fun update(server: McpServerSetting, bearerToken: String? = null) =
+        toolSelectionMutex.withLock {
+            updateUnlocked(server, bearerToken)
+        }
+
+    private suspend fun updateUnlocked(server: McpServerSetting, bearerToken: String? = null) {
         val previous = requireNotNull(serverById(server.id)) { "MCP 服务器不存在" }
         val secretStore = secrets()
         val previousToken = secretStore.bearerToken(server.id)
@@ -67,11 +75,29 @@ internal object McpServerRepository {
         }
     }
 
-    suspend fun setToolEnabled(serverId: String, toolName: String, enabled: Boolean) {
+    suspend fun setToolEnabled(serverId: String, toolName: String, enabled: Boolean) = toolSelectionMutex.withLock {
         val server = requireNotNull(serverById(serverId)) { "MCP 服务器不存在" }
+        require(server.tools.any { it.name == toolName }) { "MCP 工具已不存在，请刷新列表" }
         val names = server.enabledToolNames.toMutableSet()
         if (enabled) names += toolName else names -= toolName
-        update(server.copy(enabledToolNames = names))
+        updateUnlocked(server.copy(enabledToolNames = names))
+    }
+
+    suspend fun enableAllTools(serverId: String) = toolSelectionMutex.withLock {
+        val server = requireNotNull(serverById(serverId)) { "MCP 服务器不存在" }
+        updateUnlocked(server.copy(enabledToolNames = server.tools.mapTo(mutableSetOf()) { it.name }))
+    }
+
+    /** Merge discovery with the latest switches, not the selection captured before network I/O. */
+    suspend fun applyDiscovery(discovered: McpServerSetting): McpServerSetting = toolSelectionMutex.withLock {
+        val current = requireNotNull(serverById(discovered.id)) { "MCP 服务器不存在" }
+        val updated = current.withDiscoveredTools(discovered.tools).copy(
+            lastRefreshedAt = discovered.lastRefreshedAt,
+            lastProtocolVersion = discovered.lastProtocolVersion,
+            toolsExpireAt = discovered.toolsExpireAt,
+        )
+        updateUnlocked(updated)
+        updated
     }
 
     suspend fun delete(serverId: String) {

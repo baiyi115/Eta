@@ -41,6 +41,16 @@ internal data class McpServerSetting(
     val lastProtocolVersion: String? = null,
     val toolsExpireAt: Long? = null,
 ) {
+    /** New discoveries default on; a refresh never re-enables a known, manually disabled tool. */
+    fun withDiscoveredTools(discovered: List<McpToolDefinition>): McpServerSetting {
+        val available = discovered.mapTo(mutableSetOf()) { it.name }
+        val known = tools.mapTo(mutableSetOf()) { it.name }
+        return copy(
+            tools = discovered,
+            enabledToolNames = enabledToolNames.intersect(available) + (available - known),
+        )
+    }
+
     val activeTools: List<McpToolDefinition>
         get() = if (!enabled) {
             emptyList()

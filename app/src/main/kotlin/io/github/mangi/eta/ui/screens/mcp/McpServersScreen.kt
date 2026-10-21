@@ -16,6 +16,7 @@ import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -33,7 +34,6 @@ import io.github.mangi.eta.agent.mcp.validateMcpEndpoint
 import io.github.mangi.eta.data.model.McpAuthorizationType
 import io.github.mangi.eta.data.model.McpProtocolMode
 import io.github.mangi.eta.data.model.McpServerSetting
-import io.github.mangi.eta.data.model.McpToolDefinition
 import io.github.mangi.eta.data.repository.McpServerRepository
 import io.github.mangi.eta.ui.components.EtaArrowPreference
 import io.github.mangi.eta.ui.components.EtaCard
@@ -123,6 +123,7 @@ internal fun McpServersScreen(
     EtaWindowDialog(
         show = showAdd,
         title = stringResource(R.string.mcp_add_server),
+        summary = stringResource(R.string.mcp_tools_trust_notice),
         onDismissRequest = { if (!working) showAdd = false },
     ) {
         // 只有表单滚动，按钮固定在底部：输入法弹出或错误较长时确认操作仍然可达。
@@ -238,10 +239,24 @@ internal fun McpServerDetailScreen(
     val servers by McpServerRepository.serversFlow().collectAsState(initial = emptyList())
     val server = servers.firstOrNull { it.id == serverId }
     var working by remember { mutableStateOf(false) }
-    var pendingRiskyTool by remember { mutableStateOf<McpToolDefinition?>(null) }
     var showDelete by remember { mutableStateOf(false) }
     var showToken by remember { mutableStateOf(false) }
     var token by remember { mutableStateOf("") }
+
+    fun updateTools(change: suspend () -> Unit) {
+        if (working) return
+        working = true
+        scope.launch {
+            try {
+                val result = withContext(Dispatchers.IO) { runCatching { change() } }
+                result.onFailure {
+                    Toast.makeText(context, resources.getString(R.string.mcp_tool_selection_failed), Toast.LENGTH_SHORT).show()
+                }
+            } finally {
+                working = false
+            }
+        }
+    }
 
     MiuixScaffoldPage(
         title = server?.name ?: stringResource(R.string.route_mcp_server_detail),
@@ -287,6 +302,7 @@ internal fun McpServerDetailScreen(
                     title = stringResource(R.string.mcp_enable_server),
                     summary = server.url,
                     checked = server.enabled,
+                    enabled = !working,
                     onCheckedChange = { enabled ->
                         scope.launch(Dispatchers.IO) {
                             McpServerRepository.update(server.copy(enabled = enabled))
@@ -318,23 +334,31 @@ internal fun McpServerDetailScreen(
                         icon = Icons.Rounded.Refresh,
                     )
                 } else {
-                    server.tools.forEachIndexed { index, tool ->
-                        if (index > 0) EtaPreferenceDivider(hasLeading = false)
-                        val checked = tool.name in server.enabledToolNames
-                        EtaSwitchPreference(
-                            title = tool.title.ifBlank { tool.name },
-                            summary = toolSummary(tool),
-                            checked = checked,
-                            onCheckedChange = { enabled ->
-                                if (enabled && tool.readOnlyHint != true) {
-                                    pendingRiskyTool = tool
-                                } else {
-                                    scope.launch(Dispatchers.IO) {
-                                        McpServerRepository.setToolEnabled(serverId, tool.name, enabled)
-                                    }
-                                }
-                            },
-                        )
+                    EtaPreference(
+                        title = stringResource(R.string.mcp_tools_enabled_count,
+                            server.tools.count { it.name in server.enabledToolNames }, server.tools.size),
+                        summary = stringResource(R.string.mcp_tools_defaults_hint),
+                        endActions = {
+                            EtaTextButton(
+                                text = stringResource(R.string.mcp_enable_all_tools),
+                                enabled = !working && server.tools.any { it.name !in server.enabledToolNames },
+                                onClick = { updateTools { McpServerRepository.enableAllTools(serverId) } },
+                            )
+                        },
+                    )
+                    server.tools.forEach { tool ->
+                        key(tool.name) {
+                            EtaPreferenceDivider(hasLeading = false)
+                            McpToolPreference(
+                                serverId = serverId,
+                                tool = tool,
+                                checked = tool.name in server.enabledToolNames,
+                                enabled = !working,
+                                onCheckedChange = { enabled ->
+                                    updateTools { McpServerRepository.setToolEnabled(serverId, tool.name, enabled) }
+                                },
+                            )
+                        }
                     }
                 }
             }
@@ -351,27 +375,6 @@ internal fun McpServerDetailScreen(
                     onClick = { showDelete = true },
                 )
             }
-        }
-    }
-
-    pendingRiskyTool?.let { tool ->
-        EtaWindowDialog(
-            show = true,
-            title = stringResource(R.string.mcp_enable_risky_tool),
-            summary = stringResource(R.string.mcp_enable_risky_tool_summary, tool.name, server?.name.orEmpty()),
-            onDismissRequest = { pendingRiskyTool = null },
-        ) {
-            MiuixDialogActions(
-                confirmText = stringResource(R.string.mcp_enable_tool),
-                destructive = true,
-                onCancel = { pendingRiskyTool = null },
-                onConfirm = {
-                    scope.launch(Dispatchers.IO) {
-                        McpServerRepository.setToolEnabled(serverId, tool.name, true)
-                    }
-                    pendingRiskyTool = null
-                },
-            )
         }
     }
 
@@ -434,10 +437,4 @@ internal fun McpServerDetailScreen(
             },
         )
     }
-}
-
-@Composable
-private fun toolSummary(tool: McpToolDefinition): String = when {
-    tool.readOnlyHint == true -> tool.description.ifBlank { stringResource(R.string.mcp_read_only_tool) }
-    else -> tool.description.ifBlank { stringResource(R.string.mcp_may_modify_data) }
 }
