@@ -36,15 +36,16 @@ gh secret set ETA_RELEASE_KEY_PASSWORD
 
 ## 构建与发布
 
-以下情况会在同一次工作流中生成 Debug APK 和经过签名验证的 Release APK，
-并作为两个可直接下载的 Actions Artifact 保存 14 天：
+以下情况会在同一次工作流中生成经过签名验证的 ARM64 Release APK，
+并作为可直接下载的 Actions Artifact 保存 14 天：
 
 - 向 `main` 推送提交
 - 推送 `v*` 标签
 - 在 GitHub 的 `Actions > Eta Build` 中手动运行
 
-同一工作流会并行执行 Lint 与单元测试。检查失败不影响 APK 上传，但推送标签时不会创建
-Release 草稿。
+main 推送产生的运行标题使用本次提交的标题。同一工作流会并行执行 Lint 与单元测试；
+检查失败不影响 APK 上传，但推送标签时不会创建 Release 草稿。构建会校验 APK 同时包含
+`arm64-v8a` 原生库且不包含 `armeabi-v7a`、`x86` 或 `x86_64` 原生库。
 
 非标签构建会在版本名后追加 SemVer 构建元数据 `+<短提交号>`，例如 `Eta-v3.2.0+a1b2c3d.apk`，
 用于区分同一版本号下的不同构建；只有标签构建产出不带后缀的正式版本名。Actions Artifact
