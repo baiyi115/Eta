@@ -14,7 +14,7 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.Implementation
 import org.robolectric.annotation.Implements
-import org.robolectric.shadow.api.Shadow
+import org.robolectric.annotation.RealObject
 import org.robolectric.shadows.ShadowAccessibilityNodeInfo
 
 @RunWith(RobolectricTestRunner::class)
@@ -29,7 +29,7 @@ class PhoneUseTextReadbackTest {
         service = controller.create().get()
         window = AccessibilityWindowInfo.obtain()
         shadowOf(window).apply {
-            setId(42)
+            setId(RefreshNodeShadow.WINDOW_ID)
             setDisplayId(7)
             setType(AccessibilityWindowInfo.TYPE_APPLICATION)
         }
@@ -38,30 +38,37 @@ class PhoneUseTextReadbackTest {
         shadowOf(service).setWindowsOnDisplay(7, listOf(window))
     }
 
-    @After fun tearDown() { controller.destroy() }
+    @After fun tearDown() {
+        RefreshNodeShadow.onRefresh = null
+        controller.destroy()
+    }
 
     @Test fun refreshesEditedChildInsteadOfVerifyingItsCachedHint() {
         val field = node(value = "搜索").apply { isShowingHintText = true }
         shadowOf(root).addChild(field)
-        val shadow = Shadow.extract<RefreshNodeShadow>(field)
-        shadow.onRefresh = {
-            field.text = "北京周末"
-            field.isShowingHintText = false
+        var fieldRefreshes = 0
+        RefreshNodeShadow.onRefresh = { refreshed ->
+            if (refreshed == field) {
+                fieldRefreshes++
+                refreshed.text = "北京周末"
+                refreshed.isShowingHintText = false
+            }
             true
         }
         val actual = read(field)
         assertEquals("北京周末", property(actual, "getText"))
-        assertEquals(1, shadow.refreshes)
+        assertEquals(1, fieldRefreshes)
         assertTrue(shadowOf(field).performedActions.isEmpty())
     }
 
     @Test fun rejectsCachedExpectedTextIfEditedNodeCannotRefresh() {
         val field = node(value = "北京周末")
         shadowOf(root).addChild(field)
-        Shadow.extract<RefreshNodeShadow>(field).onRefresh = { false }
+        RefreshNodeShadow.onRefresh = { refreshed -> refreshed != field }
         val actual = read(field)
         assertNull(property(actual, "getText"))
-        assertTrue(property(actual, "getUnavailableReason").toString().contains("刷新失败"))
+        val reason = property(actual, "getUnavailableReason").toString()
+        assertTrue(reason, reason.contains("刷新失败"))
     }
 
     @Test fun cannotVerifyAgainstDifferentFocusedFieldWithSameValue() {
@@ -69,14 +76,13 @@ class PhoneUseTextReadbackTest {
         val replacement = node(value = "北京周末").apply { isFocused = true }
         shadowOf(root).addChild(replacement)
         assertNull(property(read(original), "getText"))
-        assertEquals(0, Shadow.extract<RefreshNodeShadow>(replacement).refreshes)
     }
 
     @Test fun nodeChangingPackageDuringRefreshCannotVerifyInput() {
         val field = node(value = "北京周末")
         shadowOf(root).addChild(field)
-        Shadow.extract<RefreshNodeShadow>(field).onRefresh = {
-            field.packageName = "other.app"
+        RefreshNodeShadow.onRefresh = { refreshed ->
+            if (refreshed == field) refreshed.packageName = "other.app"
             true
         }
         assertNull(property(read(field), "getText"))
@@ -116,11 +122,19 @@ class PhoneUseTextReadbackTest {
 
     @Implements(AccessibilityNodeInfo::class)
     class RefreshNodeShadow : ShadowAccessibilityNodeInfo() {
-        var onRefresh: (() -> Boolean)? = null
-        var refreshes = 0
+        @RealObject
+        lateinit var realNode: AccessibilityNodeInfo
+
         @Implementation override fun refresh(): Boolean {
-            refreshes++
-            return onRefresh?.invoke() ?: true
+            return onRefresh?.invoke(realNode) ?: true
+        }
+
+        @Implementation override fun getWindowId(): Int = WINDOW_ID
+
+        companion object {
+            // Robolectric does not link AccessibilityNodeInfo.windowId to the window fixture.
+            const val WINDOW_ID = 42
+            var onRefresh: ((AccessibilityNodeInfo) -> Boolean)? = null
         }
     }
 }

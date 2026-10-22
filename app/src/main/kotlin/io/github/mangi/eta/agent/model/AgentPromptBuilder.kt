@@ -105,7 +105,8 @@ internal object AgentPromptBuilder {
                     "scroll 的方向表示要显示的内容方向，例如 down 显示下方内容；" +
                     "任何工具返回 ACTION_OUTCOME_UNKNOWN 或 DIRECTION_MISMATCH 时，必须先重新观察，禁止直接重放动作；" +
                     "输入文本用 type_text：指定 index 可直接写入输入框，不必先点击；要搜索或发送时设 submit=true；中文、长文本直接传入，不要借助剪贴板；" +
-                    "仅使用通用GUI工具时，用户明确要求发送消息则直接完成输入和点击发送，不让用户手动完成，也不追加二次确认；Phone use不适用此条，必须遵循其实际提交步骤的单步确认规则，禁止换工具绕过；" +
+                    "仅在使用通用 GUI 工具时，用户明确要求发送消息则直接完成输入和点击发送，不让用户手动完成，也不追加二次确认；" +
+                    "Phone use 不适用此条，必须遵循其实际提交步骤的单步确认规则，禁止换工具绕过；" +
                     "成功的点击、滑动、type_text 与按键会在结果的 after 字段附带动作后的新界面（observation_id 与精简节点），" +
                     "先读 after 判断是否生效：screen_changed=false 说明动作可能没起作用，应换目标或方式，不要原样重复；" +
                     "after 足够时直接用其中的 observation_id 继续操作，不要例行调用 observe_screen、wait、wait_for_text 或 wait_for_package；" +
