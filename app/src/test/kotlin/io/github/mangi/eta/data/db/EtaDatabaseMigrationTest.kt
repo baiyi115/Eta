@@ -7,6 +7,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.sqlite.db.SupportSQLiteOpenHelper
 import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
 import io.github.mangi.eta.data.model.ModelSource
+import io.github.mangi.eta.data.model.ProviderAuthModes
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
@@ -123,6 +124,8 @@ class EtaDatabaseMigrationTest {
             assertEquals(null, runBlocking(Dispatchers.IO) { database.conversationDao().state() })
             assertEquals(listOf("built-in", "manual"), provider.models.map { it.modelId })
             assertEquals(false, provider.hostedWebSearchEnabled)
+            assertEquals(ProviderAuthModes.API_KEY, provider.authMode)
+            assertEquals("fixture-existing-api-key", provider.apiKey)
             assertEquals(false, migratedMessage.isEdited)
             assertEquals(emptyList<RuntimeInFlightRunWithEvents>(), inFlightRuns)
             assertEquals(listOf("mcp-1"), mcpServers.map { it.id })
@@ -198,7 +201,7 @@ class EtaDatabaseMigrationTest {
                             "INSERT INTO model_providers " +
                                 "(id, type, name, base_url, api_key, is_enabled, is_built_in, sort_order, " +
                                 "system_prompt, custom_headers_json, custom_body_json, created_at, endpoint_mode, anthropic_version) " +
-                                "VALUES ('provider-1', 'openai_compatible', 'Provider', 'https://example.com/v1', '', 1, 0, 0, " +
+                                "VALUES ('provider-1', 'openai_compatible', 'Provider', 'https://example.com/v1', 'fixture-existing-api-key', 1, 0, 0, " +
                                 "NULL, '[]', '[]', 1, 'chat_completions', '2023-06-01')"
                         )
                         db.execSQL(providerModelInsert("built-in-id", "built-in", 1, 0))

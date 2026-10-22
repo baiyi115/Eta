@@ -84,11 +84,6 @@ internal abstract class EtaDatabase : RoomDatabase() {
             }
         }
 
-        internal val MIGRATION_22_23 = Migration(22, 23) { database ->
-            database.execSQL("ALTER TABLE runtime_results ADD COLUMN reply_images_json TEXT NOT NULL DEFAULT '[]'")
-            database.execSQL("ALTER TABLE runtime_archive_runs ADD COLUMN reply_images_json TEXT NOT NULL DEFAULT '[]'")
-        }
-
         internal val MIGRATION_19_20 = Migration(19, 20) { database ->
             database.execSQL("ALTER TABLE conversation_context_checkpoints ADD COLUMN journal_json TEXT NOT NULL DEFAULT ''")
             database.execSQL("ALTER TABLE runtime_inflight_runs ADD COLUMN transcript_json TEXT NOT NULL DEFAULT '[]'")
@@ -117,6 +112,12 @@ internal abstract class EtaDatabase : RoomDatabase() {
 
         internal val MIGRATION_21_22 = Migration(21, 22) { database ->
             database.execSQL("ALTER TABLE conversations ADD COLUMN model_id TEXT")
+        }
+
+        internal val MIGRATION_22_23 = Migration(22, 23) { database ->
+            database.execSQL("ALTER TABLE model_providers ADD COLUMN auth_mode TEXT NOT NULL DEFAULT 'api_key'")
+            database.execSQL("ALTER TABLE runtime_results ADD COLUMN reply_images_json TEXT NOT NULL DEFAULT '[]'")
+            database.execSQL("ALTER TABLE runtime_archive_runs ADD COLUMN reply_images_json TEXT NOT NULL DEFAULT '[]'")
         }
 
         private fun createTextChunkCleanup(database: androidx.sqlite.db.SupportSQLiteDatabase) {
