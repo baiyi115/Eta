@@ -88,6 +88,9 @@ internal fun ToolActivityMessageUi.outcomeLine(): String? {
     val summary = resultSummary?.trim()?.takeIf { it.isNotEmpty() } ?: return null
     val lines = summary.lines().map(String::trim).filter(String::isNotEmpty)
     val head = lines.firstOrNull() ?: return null
+    if (status == ToolActivityStatusUi.Success && toolName.startsWith("mcp_")) {
+        return head.removePrefix(SUCCESS_PREFIX).takeIf { it.isNotBlank() }
+    }
     return when (status) {
         ToolActivityStatusUi.Running -> null
         ToolActivityStatusUi.Failed, ToolActivityStatusUi.Unknown -> {
@@ -102,7 +105,16 @@ internal fun ToolActivityMessageUi.outcomeLine(): String? {
             when {
                 output != null -> output
                 head in TRIVIAL_SUCCESS -> null
-                else -> head.removePrefix(SUCCESS_PREFIX).takeIf { it.isNotBlank() }
+                else -> {
+                    val visible = head.removePrefix(SUCCESS_PREFIX)
+                    val actionLabel = argumentsSummary.substringBefore(" · ").trim()
+                    val normalized = if (actionLabel.isBlank()) {
+                        visible
+                    } else {
+                        visible.removePrefix("$actionLabel · ")
+                    }
+                    normalized.takeIf { it.isNotBlank() }
+                }
             }
         }
     }

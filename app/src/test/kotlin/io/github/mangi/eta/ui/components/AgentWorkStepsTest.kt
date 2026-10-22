@@ -60,6 +60,30 @@ class AgentWorkStepsTest {
     }
 
     @Test
+    fun mcpOutcomeUsesResultHeaderInsteadOfLastPreviewLine() {
+        val message = tool(
+            "mcp-1",
+            "mcp_12345678_open_apk_deadbeef",
+            resultSummary = "MT管理器 · open_apk · 返回 5 项\n已读取 5 个安装包\n…",
+        )
+
+        assertEquals("MT管理器 · open_apk · 返回 5 项", message.outcomeLine())
+    }
+
+    @Test
+    fun structuredResultCountRemainsVisible() {
+        assertEquals(
+            "3 个界面节点",
+            tool(
+                "observe",
+                "observe_screen",
+                argumentsSummary = "观察屏幕 · 含界面树",
+                resultSummary = "观察屏幕 · 3 个界面节点",
+            ).outcomeLine(),
+        )
+    }
+
+    @Test
     fun trivialSuccessHasNoOutcome() {
         assertNull(tool("t1", "observe_screen", resultSummary = "完成").outcomeLine())
         assertEquals("2 张图片", tool("t2", "observe_screen", resultSummary = "完成 · 2 张图片").outcomeLine())
@@ -98,12 +122,13 @@ class AgentWorkStepsTest {
         id: String,
         name: String,
         status: ToolActivityStatusUi = ToolActivityStatusUi.Success,
+        argumentsSummary: String = name,
         resultSummary: String? = null,
     ) = ToolActivityMessageUi(
         id = id,
         toolName = name,
         status = status,
-        argumentsSummary = name,
+        argumentsSummary = argumentsSummary,
         resultSummary = resultSummary,
     )
 }

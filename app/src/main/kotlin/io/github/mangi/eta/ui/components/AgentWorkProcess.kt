@@ -155,6 +155,7 @@ internal fun AgentWorkProcess(
                             onOpenBrowser = onOpenBrowser,
                             currentBrowserMessageId = currentBrowserMessageId,
                             retainedStreamingStates = retainedStreamingStates,
+                            autoExpandLatest = showingLatest && index == steps.lastIndex,
                         )
                     }
                 }
@@ -258,6 +259,7 @@ private fun AgentWorkStepNode(
     onOpenBrowser: () -> Unit,
     currentBrowserMessageId: String?,
     retainedStreamingStates: Map<String, StreamingMarkdownState>,
+    autoExpandLatest: Boolean,
 ) {
     when (step) {
         is AgentWorkStep.ToolGroup -> WorkTimelineNode(
@@ -282,6 +284,7 @@ private fun AgentWorkStepNode(
                     message = message,
                     onOpenBrowser = onOpenBrowser,
                     showBrowserShortcut = message.id == currentBrowserMessageId,
+                    autoExpandResult = autoExpandLatest,
                 )
             }
 

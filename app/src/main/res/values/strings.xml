@@ -1383,6 +1383,11 @@
   <string name="chat_character_story_start">The story begins here</string>
   <string name="tool_details_expand">Expand tool details</string>
   <string name="tool_details_collapse">Collapse tool details</string>
+  <string name="tool_mcp">MCP tool</string>
+  <string name="tool_result_success">Tool result</string>
+  <string name="tool_result_failed">Tool failed</string>
+  <string name="tool_result_unconfirmed">Tool result unconfirmed</string>
+  <string name="copy_tool_result">Copy result summary</string>
   <string name="shared_folders_picker_no_subfolders">No subfolders here</string>
   <string name="memory_empty_title">No memories yet</string>
   <string name="memory_mode_preview">Preview</string>

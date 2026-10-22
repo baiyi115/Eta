@@ -1360,6 +1360,11 @@
   <string name="chat_character_story_start">故事从这里开始</string>
   <string name="tool_details_expand">展开工具详情</string>
   <string name="tool_details_collapse">收起工具详情</string>
+  <string name="tool_mcp">MCP 工具</string>
+  <string name="tool_result_success">执行结果</string>
+  <string name="tool_result_failed">执行失败</string>
+  <string name="tool_result_unconfirmed">结果未确认</string>
+  <string name="copy_tool_result">复制结果摘要</string>
   <string name="shared_folders_picker_no_subfolders">此处没有子文件夹</string>
   <string name="memory_empty_title">还没有记忆</string>
   <string name="memory_mode_preview">预览</string>

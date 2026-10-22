@@ -102,8 +102,10 @@ internal fun ToolActivityRow(
     showBrowserShortcut: Boolean,
     modifier: Modifier = Modifier,
     showTitle: Boolean = true,
+    autoExpandResult: Boolean = false,
 ) {
     var expanded by rememberSaveable(message.id) { mutableStateOf(false) }
+    var userToggledExpansion by rememberSaveable(message.id) { mutableStateOf(false) }
     // 只有「当前浏览器」条目订阅实时会话快照，避免每个工具行都跟随快照重组。
     val browserSnapshot = if (showBrowserShortcut) {
         AgentBrowserSession.snapshots.collectAsState().value
@@ -112,7 +114,10 @@ internal fun ToolActivityRow(
     }
     val running = message.status == ToolActivityStatusUi.Running
     val failed = message.status == ToolActivityStatusUi.Failed
-    val title = message.argumentsSummary.ifBlank { toolDisplayName(message.toolName) }
+    val unconfirmed = message.status == ToolActivityStatusUi.Unknown
+    val title = message.argumentsSummary
+        .takeUnless { it.isBlank() || it == PREPARING_TOOL_LABEL }
+        ?: toolDisplayName(message.toolName)
     val outcome = remember(message.status, message.resultSummary) { message.outcomeLine() }
     val browserLine = browserSnapshot?.let { snapshot ->
         when {
@@ -123,12 +128,24 @@ internal fun ToolActivityRow(
         }
     }
     val subtitle = browserLine ?: outcome
-    // 结果只有一行且已作为结论显示时，展开不会带来新信息，不提供展开入口。
-    val resultDetail = message.resultSummary?.trim()?.takeIf { it.isNotEmpty() && it != outcome }
+    // 一行成功结果已经作为副标题显示时不重复提供展开入口；错误和未确认结果即使
+    // 只有一行也保留展开，让用户仍能看到完整原因。
+    val result = message.resultSummary?.trim()?.takeIf(String::isNotEmpty)
+    val resultLineCount = result
+        ?.lineSequence()
+        ?.count(String::isNotBlank)
+        ?: 0
+    val hasExpandedResult = result != null && (resultLineCount > 1 || failed || unconfirmed)
     val hasDetail = !message.command.isNullOrBlank() ||
-        resultDetail != null ||
+        hasExpandedResult ||
         showBrowserShortcut
     val elapsedSeconds = rememberRunningSeconds(message.id, running)
+
+    LaunchedEffect(autoExpandResult, message.status, hasDetail) {
+        if (!userToggledExpansion) {
+            expanded = autoExpandResult && !running && hasDetail
+        }
+    }
 
     Column(modifier = modifier.fillMaxWidth()) {
         Row(
@@ -136,7 +153,16 @@ internal fun ToolActivityRow(
                 .fillMaxWidth()
                 .heightIn(min = WorkRowHeight)
                 .clip(RoundedCornerShape(10.dp))
-                .then(if (hasDetail) Modifier.clickable { expanded = !expanded } else Modifier)
+                .then(
+                    if (hasDetail) {
+                        Modifier.clickable {
+                            userToggledExpansion = true
+                            expanded = !expanded
+                        }
+                    } else {
+                        Modifier
+                    },
+                )
                 .padding(vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -216,14 +242,20 @@ internal fun ToolGroupRow(
     val latest = group.calls.last()
     val title = toolDisplayName(group.toolName) + " · " +
         pluralStringResource(R.plurals.tool_group_calls, group.calls.size, group.calls.size)
+    val latestOutcome = remember(group.calls) { latest.outcomeLine() }
     val subtitle = when {
-        running -> latest.argumentsSummary.takeIf(String::isNotBlank)
-        group.failedCount > 0 -> pluralStringResource(
-            R.plurals.work_summary_failed,
-            group.failedCount,
-            group.failedCount,
-        )
-        else -> null
+        running -> latest.argumentsSummary.takeIf {
+            it.isNotBlank() && it != PREPARING_TOOL_LABEL && it != toolDisplayName(group.toolName)
+        }
+        group.failedCount > 0 -> listOfNotNull(
+            pluralStringResource(
+                R.plurals.work_summary_failed,
+                group.failedCount,
+                group.failedCount,
+            ),
+            latestOutcome,
+        ).joinToString(" · ")
+        else -> latestOutcome
     }
 
     Column(modifier = modifier.fillMaxWidth()) {
@@ -232,7 +264,9 @@ internal fun ToolGroupRow(
                 .fillMaxWidth()
                 .heightIn(min = WorkRowHeight)
                 .clip(RoundedCornerShape(10.dp))
-                .clickable { expanded = !expanded }
+                .clickable {
+                    expanded = !expanded
+                }
                 .padding(vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -312,26 +346,7 @@ private fun ToolActivityDetail(
         }
         val result = message.resultSummary?.takeIf(String::isNotBlank)
         if (result != null) {
-            SelectionContainer {
-                Text(
-                    text = result,
-                    style = if (message.isTerminalTool()) {
-                        MiuixTheme.textStyles.footnote2.copy(fontFamily = FontFamily.Monospace)
-                    } else {
-                        MiuixTheme.textStyles.footnote2
-                    },
-                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                    maxLines = MAX_RESULT_LINES,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .squircleSurface(
-                            color = MiuixTheme.colorScheme.surfaceContainer,
-                            cornerRadius = 10.dp,
-                        )
-                        .padding(horizontal = 12.dp, vertical = 10.dp),
-                )
-            }
+            ToolResultBlock(message = message, result = result)
         }
         if (showBrowserShortcut) {
             browserSnapshot?.takeIf { it.available }?.let { snapshot ->
@@ -346,6 +361,125 @@ private fun ToolActivityDetail(
                     textStyle = MiuixTheme.textStyles.body2,
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun ToolResultBlock(
+    message: ToolActivityMessageUi,
+    result: String,
+    modifier: Modifier = Modifier,
+) {
+    @Suppress("DEPRECATION")
+    val clipboardManager = LocalClipboardManager.current
+    val failed = message.status == ToolActivityStatusUi.Failed
+    val unconfirmed = message.status == ToolActivityStatusUi.Unknown
+    var copied by remember(message.id, result) { mutableStateOf(false) }
+    LaunchedEffect(copied) {
+        if (copied) {
+            delay(1_400)
+            copied = false
+        }
+    }
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .squircleSurface(
+                color = MiuixTheme.colorScheme.surfaceContainer,
+                cornerRadius = 10.dp,
+            )
+            .squircleBorder(
+                width = 0.5.dp,
+                color = when {
+                    failed -> StatusError.copy(alpha = 0.35f)
+                    unconfirmed -> StatusRunning.copy(alpha = 0.35f)
+                    else -> MiuixTheme.colorScheme.outline.copy(alpha = 0.35f)
+                },
+                cornerRadius = 10.dp,
+            ),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 12.dp, end = 2.dp, top = 2.dp, bottom = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(6.dp)
+                    .clip(CircleShape)
+                    .background(
+                        when {
+                            failed -> StatusError
+                            unconfirmed -> StatusRunning
+                            else -> StatusSuccess
+                        },
+                    ),
+            )
+            Spacer(modifier = Modifier.width(7.dp))
+            Text(
+                text = stringResource(
+                    when {
+                        failed -> R.string.tool_result_failed
+                        unconfirmed -> R.string.tool_result_unconfirmed
+                        else -> R.string.tool_result_success
+                    },
+                ),
+                style = MiuixTheme.textStyles.footnote2,
+                color = when {
+                    failed -> StatusError
+                    unconfirmed -> StatusRunning
+                    else -> MiuixTheme.colorScheme.onSurfaceVariantSummary
+                },
+                modifier = Modifier.weight(1f),
+            )
+            IconButton(
+                onClick = {
+                    @Suppress("DEPRECATION")
+                    clipboardManager.setText(AnnotatedString(result))
+                    copied = true
+                },
+                minWidth = 36.dp,
+                minHeight = 36.dp,
+            ) {
+                Icon(
+                    imageVector = if (copied) Icons.Rounded.Check else Icons.Rounded.ContentCopy,
+                    contentDescription = stringResource(
+                        if (copied) R.string.copy_copied else R.string.copy_tool_result,
+                    ),
+                    modifier = Modifier.size(14.dp),
+                    tint = if (copied) {
+                        MiuixTheme.colorScheme.primary
+                    } else {
+                        MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.8f)
+                    },
+                )
+            }
+        }
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp)
+                .height(0.5.dp)
+                .background(MiuixTheme.colorScheme.outline.copy(alpha = 0.4f)),
+        )
+        SelectionContainer {
+            Text(
+                text = result,
+                style = if (message.isTerminalTool()) {
+                    MiuixTheme.textStyles.footnote2.copy(fontFamily = FontFamily.Monospace)
+                } else {
+                    MiuixTheme.textStyles.footnote2
+                },
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                maxLines = MAX_RESULT_LINES,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+            )
         }
     }
 }
@@ -381,6 +515,7 @@ private fun ToolActivityStatusUi.dotColor() = when (this) {
 
 private const val RUNNING_TIMER_THRESHOLD_SECONDS = 3
 private const val MAX_RESULT_LINES = 12
+private const val PREPARING_TOOL_LABEL = "准备执行"
 
 /**
  * 浏览器工具的实时页面预览：迷你地址条 + 当前视口截图。
