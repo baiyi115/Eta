@@ -64,6 +64,10 @@ class ToolCatalogUiTest {
         assertTrue(web.tools.map { it.id }.containsAll(listOf("web_search", "fetch_url", "browser_use")))
         assertEquals(R.string.tool_web_search, toolDisplayNameResource("web_search"))
         assertEquals(R.string.tool_fetch_url, toolDisplayNameResource("fetch_url"))
+        assertEquals(
+            R.string.tool_mcp,
+            toolDisplayNameResource("mcp_12345678_open_apk_deadbeef"),
+        )
     }
 
     @Test

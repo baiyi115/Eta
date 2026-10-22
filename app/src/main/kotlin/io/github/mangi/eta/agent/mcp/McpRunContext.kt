@@ -110,18 +110,22 @@ internal class McpToolExecutor(
             message = "MCP 工具未在本次运行中启用",
         )
         val arguments = runCatching { JSONObject(toolCall.argumentsJson.ifBlank { "{}" }) }
-            .getOrElse { return failure("INVALID_ARGUMENT", "MCP 工具参数不是 JSON object") }
+            .getOrElse {
+                return failure("INVALID_ARGUMENT", "MCP 工具参数不是 JSON object", tool)
+            }
         return runCatching {
             val client = synchronized(lifecycleLock) {
-                if (closed) return failure("MCP_EXECUTOR_CLOSED", "MCP 工具执行器已关闭")
+                if (closed) {
+                    return failure("MCP_EXECUTOR_CLOSED", "MCP 工具执行器已关闭", tool)
+                }
                 clients[tool.server.id] ?: McpHttpClient(
                     server = tool.server,
                     bearerToken = tool.bearerToken,
                 ).also { clients[tool.server.id] = it }
             }
             adaptResult(tool, client.callTool(tool.definition, arguments))
-        }.getOrElse {
-            failure("MCP_CALL_FAILED", "MCP 工具调用失败")
+        }.getOrElse { throwable ->
+            failureFor(tool, throwable)
         }
     }
 
@@ -142,12 +146,14 @@ internal class McpToolExecutor(
             return failure(
                 code = "MCP_INPUT_REQUIRED_UNSUPPORTED",
                 message = "当前版本暂不支持 MCP 工具在执行中请求补充输入",
+                tool = tool,
             )
         }
         if (tool.server.lastProtocolVersion == McpProtocolMode.LATEST && resultType != "complete") {
             return failure(
                 code = "MCP_RESULT_TYPE_UNSUPPORTED",
                 message = "MCP 工具返回了不支持的结果类型",
+                tool = tool,
             )
         }
         val content = result.optJSONArray("content") ?: JSONArray()
@@ -250,12 +256,38 @@ internal class McpToolExecutor(
         )
     }
 
-    private fun failure(code: String, message: String): AgentModelClient.ToolResult =
+    private fun failureFor(tool: McpRunTool, throwable: Throwable): AgentModelClient.ToolResult {
+        val code = when (throwable) {
+            is McpHttpStatusException -> "MCP_HTTP_ERROR"
+            is McpJsonRpcException -> "MCP_JSON_RPC_ERROR"
+            else -> "MCP_CALL_FAILED"
+        }
+        val message = when (throwable) {
+            is McpHttpStatusException, is McpJsonRpcException -> throwable.message
+                ?.trim()
+                ?.take(MAX_FAILURE_MESSAGE_CHARS)
+                ?.takeIf(String::isNotBlank)
+            else -> null
+        } ?: "MCP 工具调用失败"
+        return failure(code, message, tool)
+    }
+
+    private fun failure(
+        code: String,
+        message: String,
+        tool: McpRunTool? = null,
+    ): AgentModelClient.ToolResult =
         AgentModelClient.ToolResult(
             content = JSONObject()
                 .put("ok", false)
                 .put("code", code)
                 .put("message", message)
+                .apply {
+                    tool?.let {
+                        put("server", it.server.name)
+                        put("tool", it.definition.name)
+                    }
+                }
                 .toString(),
             sensitive = true,
         )
@@ -275,6 +307,7 @@ internal class McpToolExecutor(
         const val MAX_TEXT_BYTES = 64 * 1024
         const val MAX_STRUCTURED_BYTES = 64 * 1024
         const val MAX_IMAGE_BYTES = 2 * 1024 * 1024
+        const val MAX_FAILURE_MESSAGE_CHARS = 240
     }
 }
 

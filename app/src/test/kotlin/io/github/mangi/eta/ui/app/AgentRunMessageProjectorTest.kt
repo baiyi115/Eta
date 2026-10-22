@@ -589,4 +589,37 @@ class AgentRunMessageProjectorTest {
         assertFalse(interruptedNotice.running)
         assertEquals(base + completed, projector.finishContextCompaction(runId, base + completed, "上下文压缩已中断"))
     }
+
+    @Test
+    fun legacyMcpFailureHeaderWithoutSuccessFlagIsProjectedAsFailed() {
+        val projector = AgentRunMessageProjector { 1_000L }
+        val runId = "legacy-mcp"
+        val started = projector.startTool(
+            runId,
+            AgentEvent.ToolStarted(
+                round = 1,
+                toolCallId = "call-1",
+                name = "mcp_server_inspect_deadbeef",
+                argsPreview = "MCP 工具",
+            ),
+            emptyList(),
+        )
+        val finished = projector.finishTool(
+            runId,
+            AgentEvent.ToolFinished(
+                round = 1,
+                toolCallId = "call-1",
+                name = "mcp_server_inspect_deadbeef",
+                resultSummary = "Remote · inspect · 失败 · code=MCP_TOOL_ERROR",
+                imageCount = 0,
+                imageBytes = 0,
+            ),
+            started,
+        )
+
+        assertEquals(
+            ToolActivityStatusUi.Failed,
+            finished.filterIsInstance<ToolActivityMessageUi>().single().status,
+        )
+    }
 }

@@ -404,7 +404,7 @@ internal class AgentRunMessageProjector(
         val status = when (event.success) {
             true -> ToolActivityStatusUi.Success
             false -> ToolActivityStatusUi.Failed
-            null -> if (event.resultSummary.contains("ok=false", ignoreCase = true)) {
+            null -> if (event.resultSummary.isLegacyFailureSummary()) {
                 ToolActivityStatusUi.Failed
             } else {
                 ToolActivityStatusUi.Success
@@ -703,6 +703,12 @@ internal class AgentRunMessageProjector(
 }
 
 private const val MAX_TOOL_RESULT_PREVIEW_CHARS = 48
+
+private fun String.isLegacyFailureSummary(): Boolean {
+    if (contains("ok=false", ignoreCase = true)) return true
+    val head = lineSequence().firstOrNull().orEmpty().trim()
+    return head.split(" · ").take(3).any { it == "失败" }
+}
 
 internal fun AgentTokenUsage.toUi(): TokenUsageUi =
     TokenUsageUi(

@@ -1,13 +1,14 @@
 package io.github.mangi.eta.agent.runtime
 
 import android.os.Bundle
+import io.github.mangi.eta.agent.model.McpResultSummary
 import org.json.JSONArray
 import org.json.JSONObject
 
 /** Runtime 事件的稳定 JSON 投影；只编码 IPC 已公开的安全字段。 */
 internal object AgentEventJsonCodec {
     fun encode(event: AgentEvent): String = bundleToJson(
-        AgentRuntimeWire.eventToBundle(event)
+        AgentRuntimeWire.eventToBundle(event.forPersistentStorage())
     ).toString()
 
     fun decode(raw: String): AgentEvent? = runCatching {
@@ -43,5 +44,17 @@ internal object AgentEventJsonCodec {
                     )
                 }
             }
+        }
+
+    private fun AgentEvent.forPersistentStorage(): AgentEvent =
+        if (this is AgentEvent.ToolFinished && name.startsWith("mcp_")) {
+            copy(
+                resultSummary = McpResultSummary.persistentHeader(
+                    summary = resultSummary,
+                    failed = success == false,
+                ),
+            )
+        } else {
+            this
         }
 }

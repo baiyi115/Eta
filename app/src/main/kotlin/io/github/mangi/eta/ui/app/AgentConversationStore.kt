@@ -6,6 +6,7 @@ import android.util.JsonToken
 import androidx.room.withTransaction
 import io.github.mangi.eta.agent.model.AgentConversationCodec
 import io.github.mangi.eta.agent.model.AgentModelClient
+import io.github.mangi.eta.agent.model.McpResultSummary
 import io.github.mangi.eta.agent.roleplay.RoleplayBinding
 import io.github.mangi.eta.agent.roleplay.RoleplayMessageState
 import io.github.mangi.eta.data.db.ConversationContextCheckpointEntity
@@ -334,7 +335,7 @@ internal object AgentConversationStore {
             is ThinkingMessageUi -> message.copy(content = message.content.take(256))
             is ToolActivityMessageUi -> message.copy(
                 argumentsSummary = message.argumentsSummary.take(256), command = message.command?.take(256),
-                resultSummary = message.resultSummary?.take(256),
+                resultSummary = message.persistedResultSummary()?.take(MAX_PERSISTED_TOOL_RESULT_CHARS),
             )
             else -> message
         } }),
@@ -453,7 +454,7 @@ internal object AgentConversationStore {
                 toolName = toolName,
                 toolStatus = status.name,
                 argumentsSummary = argumentsSummary,
-                resultSummary = resultSummary,
+                resultSummary = persistedResultSummary(),
                 imageCount = imageCount,
                 toolsJson = modifiedFileKeys.toJsonArrayString(),
             )
@@ -552,6 +553,18 @@ internal object AgentConversationStore {
             }
         }.getOrDefault(emptyList())
 
+    /**
+     * MCP 正文预览只用于当前运行中的交互。持久化只保留第一行状态头，避免远端
+     * 返回的任意文本因启发式脱敏遗漏而进入会话数据库。
+     */
+    private fun ToolActivityMessageUi.persistedResultSummary(): String? {
+        val summary = resultSummary ?: return null
+        if (!toolName.startsWith("mcp_")) return summary
+        return McpResultSummary.persistentHeader(summary, failed = status == ToolActivityStatusUi.Failed)
+            .takeIf(String::isNotBlank)
+            ?.take(MAX_PERSISTED_TOOL_RESULT_CHARS)
+    }
+
     private fun List<ConversationMessageEntity>.toLegacyHistory(): List<AgentModelClient.ConversationMessage> =
         mapNotNull { message ->
             when (message.type) {
@@ -578,5 +591,6 @@ internal object AgentConversationStore {
     private const val TYPE_TOOL = "tool"
     private const val TYPE_TOOL_SUMMARY = "tool_summary"
     private const val MESSAGE_LOAD_PAGE_SIZE = 128
+    private const val MAX_PERSISTED_TOOL_RESULT_CHARS = 256
     private const val LEGACY_UNNAMED_TITLE = "新对话"
 }

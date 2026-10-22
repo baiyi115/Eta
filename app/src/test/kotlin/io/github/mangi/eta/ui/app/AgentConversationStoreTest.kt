@@ -182,6 +182,76 @@ class AgentConversationStoreTest {
     }
 
     @Test
+    fun mcpResultPreviewIsTransientAndOnlyHeaderIsPersisted() {
+        val conversation = AgentChatHomeUiState(
+            messages = listOf(
+                ToolActivityMessageUi(
+                    id = "mcp-tool",
+                    toolName = "mcp_server_inspect_deadbeef",
+                    status = ToolActivityStatusUi.Success,
+                    argumentsSummary = "MCP 工具",
+                    resultSummary = "Remote · inspect · 返回 1 项\nprivate-preview",
+                ),
+            ),
+            input = "",
+            isStreaming = false,
+            thinkingEnabled = false,
+        )
+
+        runBlocking {
+            AgentConversationStore.save(
+                context = context,
+                selectedConversationId = "mcp-conversation",
+                conversationsById = mapOf("mcp-conversation" to conversation),
+                titles = mapOf("mcp-conversation" to "MCP"),
+                updatedAt = mapOf("mcp-conversation" to 1L),
+            )
+        }
+
+        val restored = AgentConversationStore.load(context)
+            .conversationsById
+            .getValue("mcp-conversation")
+            .messages
+            .single() as ToolActivityMessageUi
+        assertEquals("Remote · inspect · 返回 1 项", restored.resultSummary)
+    }
+
+    @Test
+    fun mcpFailureReasonIsNotPersisted() {
+        val conversation = AgentChatHomeUiState(
+            messages = listOf(
+                ToolActivityMessageUi(
+                    id = "mcp-tool",
+                    toolName = "mcp_server_inspect_deadbeef",
+                    status = ToolActivityStatusUi.Failed,
+                    argumentsSummary = "MCP 工具",
+                    resultSummary = "Remote · inspect · 失败 · token=private-value · code=MCP_TOOL_ERROR",
+                ),
+            ),
+            input = "",
+            isStreaming = false,
+            thinkingEnabled = false,
+        )
+
+        runBlocking {
+            AgentConversationStore.save(
+                context = context,
+                selectedConversationId = "mcp-failure",
+                conversationsById = mapOf("mcp-failure" to conversation),
+                titles = mapOf("mcp-failure" to "MCP"),
+                updatedAt = mapOf("mcp-failure" to 1L),
+            )
+        }
+
+        val restored = AgentConversationStore.load(context)
+            .conversationsById
+            .getValue("mcp-failure")
+            .messages
+            .single() as ToolActivityMessageUi
+        assertEquals("Remote · inspect · 失败 · code=MCP_TOOL_ERROR", restored.resultSummary)
+    }
+
+    @Test
     fun saveAndLoadPreservesSemanticSystemNoticesWithoutTranslatedContent() {
         val notice = SystemNoticeMessageUi(
             id = "assistant-run-1-1",

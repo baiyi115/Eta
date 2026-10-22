@@ -107,7 +107,10 @@ class McpRunContextTest {
                 AgentModelClient.ToolCall("call-1", "mcp_server_search", "{}")
             )
 
-            assertEquals("MCP_EXECUTOR_CLOSED", JSONObject(result.content).getString("code"))
+            val payload = JSONObject(result.content)
+            assertEquals("MCP_EXECUTOR_CLOSED", payload.getString("code"))
+            assertEquals("Server", payload.getString("server"))
+            assertEquals("search", payload.getString("tool"))
             assertEquals(0, requests.get())
         } finally {
             server.stop(0)

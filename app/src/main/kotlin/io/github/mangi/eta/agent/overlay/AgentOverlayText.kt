@@ -54,7 +54,13 @@ internal fun toolDisplayName(resources: Resources, name: String): String {
 }
 
 @StringRes
-internal fun toolDisplayNameResource(name: String): Int? = when (name) {
+internal fun toolDisplayNameResource(name: String): Int? {
+    if (name.startsWith("mcp_")) return R.string.tool_mcp
+    return toolDisplayNameResourceWithoutMcp(name)
+}
+
+@StringRes
+private fun toolDisplayNameResourceWithoutMcp(name: String): Int? = when (name) {
     "phone_use" -> R.string.tool_phone_use
     "background_phone_use" -> R.string.tool_background_phone_use
     "observe_screen" -> R.string.tool_observe_screen

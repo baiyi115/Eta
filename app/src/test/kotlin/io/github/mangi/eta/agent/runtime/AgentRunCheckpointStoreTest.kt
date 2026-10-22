@@ -117,6 +117,33 @@ class AgentRunCheckpointStoreTest {
     }
 
     @Test
+    fun checkpointPersistsOnlyTheMcpStatusHeader() {
+        val request = request("run-mcp")
+        AgentRunCheckpointStore.start(context = context, request = request)
+        AgentRunCheckpointStore.append(
+            context = context,
+            runId = request.runId,
+            sortIndex = 0,
+            event = AgentEvent.ToolFinished(
+                round = 1,
+                toolCallId = "call-1",
+                name = "mcp_server_inspect_deadbeef",
+                resultSummary = "Remote · inspect · 失败 · private-reason · code=MCP_TOOL_ERROR\nprivate-preview",
+                imageCount = 0,
+                imageBytes = 0,
+                success = false,
+            ),
+        )
+
+        val restored = AgentRunCheckpointStore.list(context)
+            .single()
+            .events
+            .filterIsInstance<AgentEvent.ToolFinished>()
+            .single()
+        assertEquals("Remote · inspect · 失败 · code=MCP_TOOL_ERROR", restored.resultSummary)
+    }
+
+    @Test
     fun discardRemovesCheckpointWithoutFlushingBufferedText() {
         val recorder = AgentRunCheckpointRecorder.create(
             context = context,
