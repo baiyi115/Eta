@@ -17,6 +17,7 @@ class AgentSensitiveTranscriptTest {
         assertTrue(AgentSensitiveToolPolicy.isSensitive("get_health_summary"))
         assertTrue(AgentSensitiveToolPolicy.isSensitive("search_personal_orders"))
         assertTrue(AgentSensitiveToolPolicy.isSensitive("search_bills"))
+        assertTrue(AgentSensitiveToolPolicy.isSensitive("network_info"))
         assertTrue(AgentSensitiveToolPolicy.isSensitive("mcp_server_search_deadbeef"))
     }
 

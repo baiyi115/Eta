@@ -1,5 +1,6 @@
 package io.github.mangi.eta.agent.model
 
+import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -226,7 +227,7 @@ class AgentTraceFormatterTest {
 
         assertTrue(displayed.contains("API_KEY=<已隐藏>"))
         assertTrue(displayed.contains("Authorization: <已隐藏>"))
-        assertTrue(displayed.contains("--password <已隐藏>"))
+        assertTrue(displayed, displayed.contains("--password <已隐藏>"))
         assertTrue(displayed.contains("access_token=<已隐藏>"))
         assertFalse(displayed.contains("sk-secret"))
         assertFalse(displayed.contains("token-value"))
@@ -327,6 +328,181 @@ class AgentTraceFormatterTest {
         assertTrue(formatter.isSuccessResult(malformed))
         assertEquals("完成", formatter.summarizeResult("tap", ok))
         assertEquals("失败 · code=X", formatter.summarizeResult("tap", failed))
+    }
+
+    @Test
+    fun structuredReadResultsExposeUsefulMetadataInsteadOfOnlyComplete() {
+        val device = formatter.summarizeResult(
+            "device_status",
+            AgentModelClient.ToolResult(
+                content = """{"ok":true,"model":"Pixel","android_version":"16","battery_percent":82,"charging":true,"memory_available_bytes":3221225472,"memory_total_bytes":8589934592}""",
+            ),
+        )
+        assertTrue(device.contains("Pixel"))
+        assertTrue(device.contains("82% 电量"))
+        assertTrue(device.contains("充电中"))
+        assertTrue(device, device.contains("3 GB / 8 GB"))
+
+        val network = formatter.summarizeResult(
+            "network_info",
+            AgentModelClient.ToolResult(
+                content = """{"ok":true,"connected":true,"validated":true,"transports":["wifi"],"ssid":"Home"}""",
+            ),
+        )
+        assertTrue(network.contains("Wi-Fi"))
+        assertTrue(network.contains("已联网"))
+        assertFalse(network.contains("Home"))
+
+        val offline = formatter.summarizeResult(
+            "network_info",
+            AgentModelClient.ToolResult(
+                content = """{"ok":true,"connected":false,"metered":true,"transports":[]}""",
+            ),
+        )
+        assertTrue(offline.contains("未连接"))
+        assertFalse(offline.contains("计费网络"))
+
+        val observation = formatter.summarizeResult(
+            "observe_screen",
+            AgentModelClient.ToolResult(
+                content = """{"ok":true,"ui_nodes":[{"text":"a"},{"text":"b"},{"text":"c"}],"ui_tree_truncated":true}""",
+            ),
+        )
+        assertTrue(observation.contains("3 个界面节点"))
+        assertTrue(observation.contains("节点已截断"))
+    }
+
+    @Test
+    fun sensitiveReadResultsExposeCountsWithoutLeakingValues() {
+        val clipboard = formatter.summarizeResult(
+            "get_clipboard",
+            AgentModelClient.ToolResult(
+                content = """{"ok":true,"text":"private-clipboard-value","truncated":false}""",
+                sensitive = true,
+            ),
+        )
+        assertTrue(clipboard.contains("已读取剪贴板"))
+        assertTrue(clipboard.contains("字符"))
+        assertFalse(clipboard.contains("private-clipboard-value"))
+
+        val notifications = formatter.summarizeResult(
+            "recent_notifications",
+            AgentModelClient.ToolResult(
+                content = """{"ok":true,"items":[{"title":"private-title"}],"count":1}""",
+                sensitive = true,
+            ),
+        )
+        assertTrue(notifications.contains("1 个结果"))
+        assertFalse(notifications.contains("private-title"))
+    }
+
+    @Test
+    fun mcpResultShowsServerToolAndBoundedRedactedPreview() {
+        val content = JSONArray()
+            .put("已读取 5 个安装包")
+            .put("client_secret=private-token")
+            .put("item-3")
+            .put("item-4")
+            .put("item-5")
+            .put("item-6")
+            .put("item-7")
+            .put("item-8")
+        val summary = formatter.summarizeResult(
+            "mcp_12345678_open_apk_deadbeef",
+            AgentModelClient.ToolResult(
+                content = JSONObject()
+                    .put("ok", true)
+                    .put("server", "MT管理器")
+                    .put("tool", "open_apk")
+                    .put("content", content)
+                    .toString(),
+                sensitive = true,
+            ),
+        )
+
+        assertTrue(summary, summary.startsWith("MT管理器 · open_apk · 返回 8 项"))
+        assertTrue(summary.contains("已读取 5 个安装包"))
+        assertTrue(summary.contains("<已隐藏>"))
+        assertFalse(summary.contains("private-token"))
+        assertTrue(summary.endsWith("…"))
+        assertTrue(summary.lines().size <= 8)
+    }
+
+    @Test
+    fun mcpPreviewRedactsJsonSecretsBearerTokensAndDisplayControls() {
+        val summary = formatter.summarizeResult(
+            "mcp_12345678_inspect_deadbeef",
+            AgentModelClient.ToolResult(
+                content = JSONObject()
+                    .put("ok", true)
+                    .put("server", "Remote")
+                    .put("tool", "inspect")
+                    .put(
+                        "content",
+                        JSONArray()
+                            .put("""{"api_key":"json-private","visible":"ok"}""")
+                            .put("""{"x-api-key":"json-private-2"}""")
+                            .put("Authorization: Bearer bearer-private-12345678")
+                            .put("""Authorization: "Basic basic-private"""")
+                            .put("password: plain-private")
+                            .put("\u001B[31mred\u001B[0m \u202Espoof"),
+                    )
+                    .toString(),
+                sensitive = true,
+            ),
+        )
+
+        assertTrue(summary.contains("<已隐藏>"))
+        assertTrue(summary.contains("\"visible\":\"ok\""))
+        assertTrue(summary.contains("red spoof"))
+        assertFalse(summary.contains("json-private"))
+        assertFalse(summary.contains("json-private-2"))
+        assertFalse(summary.contains("bearer-private"))
+        assertFalse(summary.contains("basic-private"))
+        assertFalse(summary.contains("plain-private"))
+        assertFalse(summary.contains("\u001B"))
+        assertFalse(summary.contains("\u202E"))
+    }
+
+    @Test
+    fun inspectAppOmitsNullVersionName() {
+        val summary = formatter.summarizeResult(
+            "inspect_app",
+            AgentModelClient.ToolResult(
+                content = """{"ok":true,"package_name":"example.app","version_name":null,"permission_count":0}""",
+            ),
+        )
+
+        assertTrue(summary.contains("example.app"))
+        assertFalse(summary.contains("版本 null"))
+    }
+
+    @Test
+    fun mcpFailureKeepsServerToolReasonAndCode() {
+        val summary = formatter.summarizeResult(
+            "mcp_12345678_open_apk_deadbeef",
+            AgentModelClient.ToolResult(
+                content = """{"ok":false,"server":"MT管理器","tool":"open_apk","content":[],"message":"目标 APK 不存在","code":"MCP_TOOL_ERROR"}""",
+                sensitive = true,
+            ),
+        )
+
+        assertTrue(summary.contains("MT管理器 · open_apk · 失败"))
+        assertTrue(summary.contains("目标 APK 不存在"))
+        assertTrue(summary.contains("code=MCP_TOOL_ERROR"))
+    }
+
+    @Test
+    fun mcpIdentityCannotInjectTheSummaryFieldSeparator() {
+        val summary = formatter.summarizeResult(
+            "mcp_12345678_open_apk_deadbeef",
+            AgentModelClient.ToolResult(
+                content = """{"ok":false,"server":"Remote · Node","tool":"inspect","content":[],"message":"private-reason","code":"MCP_TOOL_ERROR"}""",
+                sensitive = true,
+            ),
+        )
+
+        assertTrue(summary.startsWith("Remote • Node · inspect · 失败 · private-reason"))
     }
 
     @Test

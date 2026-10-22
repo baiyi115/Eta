@@ -7,6 +7,7 @@ internal object AgentSensitiveToolPolicy {
 
     private val sensitiveTools = setOf(
         "phone_use", "background_phone_use",
+        "network_info",
         "get_setting",
         "wifi_credentials",
         "recent_notifications",

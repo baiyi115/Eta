@@ -397,6 +397,9 @@ internal class AgentStructuredDeviceTools(
         val fallbackSsid =
             WIFI_STATUS_SSID.find(rootWifiStatus)?.groupValues?.get(1)?.trim()?.trim('"')
         val fallbackRssi = WIFI_STATUS_RSSI.find(rootWifiStatus)?.groupValues?.get(1)?.toIntOrNull()
+        val metered = capabilities?.let {
+            !it.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
+        }
         return JSONObject()
             .put("ok", true)
             .put("connected", capabilities != null)
@@ -404,10 +407,7 @@ internal class AgentStructuredDeviceTools(
                 "validated",
                 capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true,
             )
-            .put(
-                "metered",
-                capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED) != true,
-            )
+            .put("metered", metered ?: JSONObject.NULL)
             .put("transports", transports)
             .put("wifi_enabled", wifi.isWifiEnabled)
             .also { result ->

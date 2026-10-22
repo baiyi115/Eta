@@ -3,6 +3,7 @@ package io.github.mangi.eta.agent.model
 import java.net.URI
 import java.security.MessageDigest
 import java.util.Locale
+import org.json.JSONArray
 import org.json.JSONObject
 
 /** 工具摘要面向用户展示，不包含敏感参数；终端命令通过独立字段提供给用户核对。 */
@@ -66,6 +67,7 @@ internal class AgentTraceFormatter {
                     ?: io.github.mangi.eta.agent.context.PersonalSearchTools.searches.firstOrNull { it.name == toolCall.name }?.title
                     ?: when (toolCall.name) { "search_notes" -> "查询便签"; "search_system_memories" -> "查询系统记忆"; "read_personal_item" -> "读取检索详情"; "summarize_bills" -> "汇总账单"; else -> null }
                 when {
+                    toolCall.name.startsWith("mcp_") -> "MCP 工具"
                     label == null -> "准备执行"
                     toolCall.name.startsWith("search_") ->
                         summarizeQueryArguments(label, toolCall.argumentsJson)
@@ -82,6 +84,7 @@ internal class AgentTraceFormatter {
                     .optString("command")
                     .trim()
                     .takeIf { it.isNotBlank() && it.length <= MAX_DISPLAY_COMMAND_CHARS }
+                    ?.sanitizeDisplayText()
                     ?.redactDisplaySecrets()
             }.getOrNull()
         } else {
@@ -105,14 +108,33 @@ internal class AgentTraceFormatter {
     }
 
     private fun String.redactDisplaySecrets(): String =
-        replace(SENSITIVE_ASSIGNMENT) { match ->
-            "${match.groupValues[1]}=<已隐藏>"
+        replace(SENSITIVE_JSON_FIELD) { match ->
+            "${match.groupValues[1]}\"<已隐藏>\""
         }
+            .replace(SENSITIVE_ASSIGNMENT) { match ->
+                "${match.groupValues[1]}=<已隐藏>"
+            }
             .replace(SENSITIVE_FLAG) { match ->
+                "${match.groupValues[1]}<已隐藏>"
+            }
+            .replace(SENSITIVE_KEY_VALUE) { match ->
                 "${match.groupValues[1]}<已隐藏>"
             }
             .replace(SENSITIVE_HEADER) { match ->
                 "${match.groupValues[1]}${match.groupValues[2]}<已隐藏>"
+            }
+            .replace(BEARER_TOKEN) { match ->
+                "${match.groupValues[1]}<已隐藏>"
+            }
+
+    /** 远端内容和命令都可能带 ANSI 控制序列或双向文本覆盖符，展示前统一清除。 */
+    private fun String.sanitizeDisplayText(): String =
+        replace("\r\n", "\n")
+            .replace('\r', '\n')
+            .replace(ANSI_ESCAPE, "")
+            .replace(BIDI_CONTROLS, "")
+            .filterNot { character ->
+                Character.isISOControl(character) && character != '\n' && character != '\t'
             }
 
     /** 外部 URI 摘要不记录 path、query、fragment 或用户信息。 */
@@ -301,6 +323,7 @@ internal class AgentTraceFormatter {
         if (toolName in AgentTerminalToolCatalog.names || toolName == "run_command") {
             return summarizeTerminalResult(toolName, json)
         }
+        if (toolName.startsWith("mcp_")) return summarizeMcpResult(json, result)
         if (json?.optString("status") == "unconfirmed") return "操作已提交，效果未确认"
         if (!isSuccessResult(result)) return summarizeFailure(json)
         return when (toolName) {
@@ -310,7 +333,7 @@ internal class AgentTraceFormatter {
                 json?.let { summarizeMemoryResult(toolName, it) } ?: "完成"
             "search_apps" -> json?.let(::summarizeSearchAppsResult) ?: "完成"
             "launch_app" -> json?.let(::summarizeLaunchAppResult) ?: "已打开"
-            else -> json?.let { summarizeGenericResult(it, result) } ?: "完成"
+            else -> json?.let { summarizeToolResult(toolName, it, result) } ?: "完成"
         }
     }
 
@@ -325,7 +348,7 @@ internal class AgentTraceFormatter {
         val label = if (toolName == "web_search") "网页搜索" else "网页读取"
         if (json == null) return "完成"
         if (!json.optBoolean("ok", true)) {
-            val code = json.optString("code").takeIf { it.matches(Regex("[A-Z][A-Z0-9_]{0,79}")) }
+            val code = json.optString("code").let(::sanitizeErrorCode)
             return listOfNotNull("${label}失败", code?.let { "code=$it" }).joinToString(" · ")
         }
         if (toolName == "web_search") {
@@ -344,7 +367,7 @@ internal class AgentTraceFormatter {
 
     /** 失败摘要保留 code= 标记，供运行日志提取稳定错误码；message 是工具侧给出的中文原因。 */
     private fun summarizeFailure(json: JSONObject?): String {
-        val code = json?.optString("code")?.takeIf { it.isNotBlank() }
+        val code = json?.optString("code")?.let(::sanitizeErrorCode)
         val reason = json?.optString("message")
             ?.let(::sanitizeSummaryValue)
             ?.takeIf { it.isNotBlank() }
@@ -362,22 +385,342 @@ internal class AgentTraceFormatter {
             if (json.has("bytes")) add("${json.optInt("bytes")} 字节")
         }.joinToString(" · ")
 
+    /**
+     * MCP 结果保留有界正文预览，便于用户核对远端工具实际返回了什么。摘要仍会脱敏常见凭据，
+     * 并限制行数与字符数；完整结果只存在于本次运行上下文，不进入持久会话。
+     */
+    private fun summarizeMcpResult(
+        json: JSONObject?,
+        result: AgentModelClient.ToolResult,
+    ): String {
+        if (json == null) return "MCP 工具 · 完成"
+        val content = json.optJSONArray("content") ?: JSONArray()
+        val server = sanitizeMcpIdentity(json.optString("server"), MAX_MCP_SERVER_CHARS)
+        val tool = sanitizeMcpIdentity(json.optString("tool"), MAX_MCP_TOOL_CHARS)
+        val ok = json.optBoolean("ok", true)
+        val header = buildList {
+            if (server.isNotBlank()) add(server)
+            if (tool.isNotBlank()) add(tool)
+            if (!ok) {
+                add("失败")
+                json.optString("message")
+                    .let(::sanitizeSummaryValue)
+                    .takeIf(String::isNotBlank)
+                    ?.let(::add)
+                json.optString("code")
+                    .let(::sanitizeErrorCode)
+                    ?.let { add("code=$it") }
+            } else {
+                when {
+                    content.length() > 0 -> add("返回 ${content.length()} 项")
+                    json.has("structured_content") -> add("返回结构化结果")
+                    else -> add("完成")
+                }
+            }
+            if (result.images.isNotEmpty()) add("${result.images.size} 张图片")
+            if (json.optBoolean("truncated")) add("已截断")
+            val omitted = json.optInt("omitted_items", 0)
+            if (omitted > 0) add("另有 $omitted 项未显示")
+        }.joinToString(" · ").ifBlank { if (ok) "MCP 工具 · 完成" else "MCP 工具 · 失败" }
+        val preview = summarizeMcpPreview(json, content) ?: return header
+        return "$header\n$preview"
+    }
+
+    private fun summarizeMcpPreview(json: JSONObject, content: JSONArray): String? {
+        val chunks = mutableListOf<String>()
+        for (index in 0 until content.length()) {
+            content.optString(index).takeIf(String::isNotBlank)?.let(chunks::add)
+        }
+        if (chunks.isEmpty()) {
+            json.opt("structured_content")
+                ?.takeUnless { it == JSONObject.NULL }
+                ?.toString()
+                ?.takeIf(String::isNotBlank)
+                ?.let(chunks::add)
+        }
+        val normalized = chunks.joinToString("\n")
+            .replace("\r\n", "\n")
+            .sanitizeDisplayText()
+            .redactDisplaySecrets()
+            .replace(BASE64_DATA_URL, "<图片数据已隐藏>")
+            .trim()
+        if (normalized.isBlank()) return null
+        val allLines = normalized.lines()
+        var preview = allLines
+            .map(String::trimEnd)
+            .filter(String::isNotBlank)
+            .take(MAX_MCP_PREVIEW_LINES)
+            .joinToString("\n")
+        var clipped = allLines.count(String::isNotBlank) > MAX_MCP_PREVIEW_LINES
+        if (preview.length > MAX_MCP_PREVIEW_CHARS) {
+            preview = preview.take(MAX_MCP_PREVIEW_CHARS)
+            clipped = true
+        }
+        return if (clipped) "$preview\n…" else preview
+    }
+
+    private fun summarizeToolResult(
+        toolName: String,
+        json: JSONObject,
+        result: AgentModelClient.ToolResult,
+    ): String = when (toolName) {
+        "device_status" -> summarizeDeviceStatus(json)
+        "network_info" -> summarizeNetworkInfo(json)
+        "get_current_context" -> summarizeCurrentContext(json)
+        "get_current_location" -> summarizeCurrentLocation(json)
+        "get_device_environment" -> summarizeDeviceEnvironment(json)
+        "get_clipboard" -> summarizeTextResult("已读取剪贴板", json.optString("text"), json)
+        "get_setting" -> summarizeSettingResult(json)
+        "stat_file" -> summarizeStatFileResult(json)
+        "observe_screen" -> summarizeScreenObservationResult(json, result)
+        "inspect_app" -> summarizeInspectAppResult(json)
+        "skills_list" -> summarizeCountResult("技能", json, "items", "count")
+        "skills_read" -> summarizeSkillReadResult(json)
+        "skills_read_resource" -> summarizeSkillResourceResult(json)
+        "get_logcat" -> summarizeLogcatResult(json)
+        else -> summarizeGenericResult(json, result)
+    }
+
+    private fun summarizeDeviceStatus(json: JSONObject): String = buildList {
+        add("设备状态")
+        json.optString("model").let(::sanitizeSummaryValue).takeIf(String::isNotBlank)?.let(::add)
+        json.optString("android_version").let(::sanitizeSummaryValue).takeIf(String::isNotBlank)?.let {
+            add("Android $it")
+        }
+        json.optInt("battery_percent", -1).takeIf { it >= 0 }?.let { add("$it% 电量") }
+        if (json.optBoolean("charging")) add("充电中")
+        if (json.has("memory_available_bytes") && json.has("memory_total_bytes")) {
+            add(
+                "内存 ${formatByteCount(json.optLong("memory_available_bytes"))} / " +
+                    formatByteCount(json.optLong("memory_total_bytes")),
+            )
+        }
+        if (json.has("storage_available_bytes") && json.has("storage_total_bytes")) {
+            add(
+                "存储 ${formatByteCount(json.optLong("storage_available_bytes"))} / " +
+                    formatByteCount(json.optLong("storage_total_bytes")),
+            )
+        }
+    }.joinToString(" · ")
+
+    private fun summarizeNetworkInfo(json: JSONObject): String = buildList {
+        add("网络信息")
+        val connected = json.optBoolean("connected")
+        val transports = json.optJSONArray("transports")
+            ?.let { array ->
+                (0 until array.length()).mapNotNull { index ->
+                    when (array.optString(index)) {
+                        "wifi" -> "Wi-Fi"
+                        "cellular" -> "移动网络"
+                        "ethernet" -> "以太网"
+                        "vpn" -> "VPN"
+                        else -> null
+                    }
+                }
+            }
+            .orEmpty()
+        if (transports.isNotEmpty()) add(transports.joinToString("、"))
+        if (!connected) add("未连接")
+        else if (json.optBoolean("validated")) add("已联网")
+        if (connected && json.has("metered") && !json.isNull("metered")) {
+            add(if (json.optBoolean("metered")) "计费网络" else "非计费网络")
+        }
+    }.joinToString(" · ")
+
+    private fun summarizeCurrentContext(json: JSONObject): String = buildList {
+        add("当前上下文")
+        json.optString("weekday").let(::sanitizeSummaryValue).takeIf(String::isNotBlank)?.let(::add)
+        json.optString("timezone").let(::sanitizeSummaryValue).takeIf(String::isNotBlank)?.let(::add)
+        val location = json.optJSONObject("location")
+        if (location?.optString("status")?.isNotBlank() == true) add("位置不可用")
+    }.joinToString(" · ")
+
+    private fun summarizeCurrentLocation(json: JSONObject): String = buildList {
+        add("已获取位置")
+        json.optInt("accuracy_m", -1).takeIf { it >= 0 }?.let { add("精度 $it 米") }
+        json.optLong("age_ms", -1).takeIf { it >= 0 }?.let {
+            add("更新于 ${formatDuration(it)}")
+        }
+    }.joinToString(" · ")
+
+    private fun summarizeDeviceEnvironment(json: JSONObject): String = buildList {
+        add("设备环境")
+        if (json.has("interactive") && !json.isNull("interactive")) {
+            add(if (json.optBoolean("interactive")) "屏幕亮起" else "屏幕熄灭")
+        }
+        if (json.has("device_locked") && !json.isNull("device_locked")) {
+            add(if (json.optBoolean("device_locked")) "已锁屏" else "已解锁")
+        }
+        json.optJSONArray("audio_outputs")?.length()?.takeIf { it > 0 }?.let { add("$it 个音频输出") }
+        json.optInt("display_count", 0).takeIf { it > 0 }?.let { add("$it 块屏幕") }
+    }.joinToString(" · ")
+
+    private fun summarizeSettingResult(json: JSONObject): String = buildList {
+        add("已读取系统设置")
+        json.optString("namespace").let(::sanitizeSummaryValue).takeIf(String::isNotBlank)?.let(::add)
+        json.optString("key").let(::sanitizeSummaryValue).takeIf(String::isNotBlank)?.let(::add)
+        if (!json.isNull("value")) {
+            val value = json.optString("value")
+            add("${value.length} 字符")
+        } else {
+            add("无值")
+        }
+    }.joinToString(" · ")
+
+    private fun summarizeStatFileResult(json: JSONObject): String {
+        val file = json.optJSONObject("file") ?: return "已读取文件信息"
+        return buildList {
+            add("文件信息")
+            file.optString("kind").let(::sanitizeSummaryValue).takeIf(String::isNotBlank)?.let(::add)
+            if (file.has("size_bytes")) add(formatByteCount(file.optLong("size_bytes")))
+        }.joinToString(" · ")
+    }
+
+    private fun summarizeScreenObservationResult(
+        json: JSONObject,
+        result: AgentModelClient.ToolResult,
+    ): String = buildList {
+        add("观察屏幕")
+        json.optJSONArray("ui_nodes")?.length()?.let { add("$it 个界面节点") }
+        if (result.images.isNotEmpty()) add("${result.images.size} 张截图")
+        if (json.optBoolean("ui_tree_truncated")) add("节点已截断")
+    }.joinToString(" · ")
+
+    private fun summarizeInspectAppResult(json: JSONObject): String = buildList {
+        add("应用信息")
+        json.optString("package_name").let(::sanitizeSummaryValue).takeIf(String::isNotBlank)?.let(::add)
+        if (json.has("version_name") && !json.isNull("version_name")) {
+            json.optString("version_name").let(::sanitizeSummaryValue).takeIf(String::isNotBlank)?.let {
+                add("版本 $it")
+            }
+        }
+        json.optInt("permission_count", -1).takeIf { it >= 0 }?.let { count ->
+            val total = json.optInt("permission_total", count)
+            add("权限 $count / $total")
+        }
+        if (!json.optBoolean("enabled", true)) add("已停用")
+        if (json.optBoolean("has_more")) add("权限可继续读取")
+    }.joinToString(" · ")
+
+    private fun summarizeSkillReadResult(json: JSONObject): String = buildList {
+        add("已读取技能")
+        json.optString("name").let(::sanitizeSummaryValue).takeIf(String::isNotBlank)?.let(::add)
+        val bodyChars = json.optString("bodyMarkdown").length
+        if (bodyChars > 0) add("$bodyChars 字")
+        json.optJSONArray("references")?.length()?.takeIf { it > 0 }?.let { add("$it 个引用") }
+    }.joinToString(" · ")
+
+    private fun summarizeSkillResourceResult(json: JSONObject): String = buildList {
+        add("已读取技能资源")
+        val chars = json.optString("text").length
+        if (chars > 0) add("$chars 字")
+        if (json.optBoolean("truncated")) add("已截断")
+    }.joinToString(" · ")
+
+    private fun summarizeLogcatResult(json: JSONObject): String = buildList {
+        add("系统日志")
+        json.optInt("count", -1).takeIf { it >= 0 }?.let { add("返回 $it 行") }
+        json.optInt("matched_lines", -1).takeIf { it >= 0 }?.let { add("匹配 $it 行") }
+        if (json.optBoolean("has_more")) add("可继续读取")
+        if (json.optBoolean("scan_limited")) add("采集范围有限")
+        if (json.optBoolean("truncated") &&
+            !json.optBoolean("has_more") &&
+            !json.optBoolean("scan_limited")
+        ) {
+            add("结果已截断")
+        }
+    }.joinToString(" · ")
+
+    private fun summarizeCountResult(
+        label: String,
+        json: JSONObject,
+        arrayKey: String,
+        countKey: String,
+    ): String {
+        val count = json.optJSONArray(arrayKey)?.length() ?: json.firstNonNegativeInt(countKey)
+            ?: return label
+        return if (count == 0) "未找到$label" else "$count 个$label"
+    }
+
+    private fun summarizeTextResult(label: String, value: String, json: JSONObject): String =
+        buildList {
+            add(label)
+            if (value.isNotEmpty()) add("${value.length} 字符")
+            if (json.optBoolean("truncated")) add("已截断")
+        }.joinToString(" · ")
+
     private fun summarizeGenericResult(
         json: JSONObject,
         result: AgentModelClient.ToolResult,
-    ): String =
-        buildList {
-            add(if (json.has("verified") && !json.optBoolean("verified")) "已执行，效果未确认" else "完成")
-            json.optJSONArray("entries")?.let { add("${it.length()} 个条目") }
-            json.optJSONArray("matches")?.let { add("${it.length()} 个匹配") }
-            if (json.has("bytes_read")) add("已读 ${json.optLong("bytes_read")} 字节")
-            if (json.has("replacements")) add("替换 ${json.optInt("replacements")} 处")
-            if (json.optBoolean("truncated") || json.optBoolean("has_more")) add("可继续读取")
-            if (json.optBoolean("partial") || json.optBoolean("scan_limited")) add("采集范围有限")
-            json.optJSONArray("apps")?.let { add("找到 ${it.length()} 个应用") }
-            json.optJSONArray("candidates")?.let { add("${it.length()} 个候选") }
-            if (result.images.isNotEmpty()) add("${result.images.size} 张图片")
-        }.joinToString(" · ")
+    ): String = buildList {
+        add(if (json.has("verified") && !json.optBoolean("verified")) "已执行，效果未确认" else "完成")
+        summarizeArrayCount(json)?.let(::add)
+        json.firstNonNegativeInt("count")?.takeIf { !json.hasArrayCount() }?.let { count ->
+            add(if (count == 0) "没有找到结果" else "$count 个结果")
+        }
+        if (json.has("bytes_read")) add("已读 ${json.optLong("bytes_read")} 字节")
+        if (json.has("line_count")) add("${json.optInt("line_count")} 行")
+        if (json.has("replacements")) add("替换 ${json.optInt("replacements")} 处")
+        json.optJSONObject("file")?.let { file ->
+            file.optString("kind").let(::sanitizeSummaryValue).takeIf(String::isNotBlank)?.let(::add)
+            if (file.has("size_bytes")) add(formatByteCount(file.optLong("size_bytes")))
+        }
+        textLength(json, "bodyMarkdown")?.let { add("$it 字") }
+        textLength(json, "text")?.let { add("$it 字符") }
+        textLength(json, "content")?.let { add("$it 字符") }
+        if (json.optBoolean("has_more")) add("可继续读取")
+        if (json.optBoolean("truncated")) add("结果已截断")
+        if (json.optBoolean("partial") || json.optBoolean("scan_limited")) add("采集范围有限")
+        json.optJSONArray("apps")?.length()?.let { add("找到 $it 个应用") }
+        json.optJSONArray("candidates")?.length()?.let { add("$it 个候选") }
+        if (result.images.isNotEmpty()) add("${result.images.size} 张图片")
+    }.distinct().joinToString(" · ")
+
+    private fun summarizeArrayCount(json: JSONObject): String? {
+        val fields = listOf(
+            "ui_nodes" to "个界面节点",
+            "items" to "个结果",
+            "entries" to "个条目",
+            "matches" to "个匹配",
+            "lines" to "行",
+        )
+        val counts = fields.mapNotNull { (key, unit) ->
+            json.optJSONArray(key)?.length()?.let { count -> count to unit }
+        }
+        if (counts.isEmpty()) return null
+        val match = counts.firstOrNull { it.first > 0 } ?: counts.first()
+        return if (match.first == 0) "没有找到结果" else "${match.first} ${match.second}"
+    }
+
+    private fun JSONObject.hasArrayCount(): Boolean =
+        listOf("ui_nodes", "items", "entries", "matches", "lines")
+            .any { optJSONArray(it) != null }
+
+    private fun textLength(json: JSONObject, key: String): Int? =
+        json.opt(key)
+            ?.takeUnless { it == JSONObject.NULL }
+            ?.let { value -> if (value is String) value.length else null }
+            ?.takeIf { it > 0 }
+
+    private fun formatByteCount(bytes: Long): String {
+        if (bytes < 0L) return "未知大小"
+        if (bytes < 1_024L) return "$bytes B"
+        val units = listOf("KB", "MB", "GB", "TB")
+        var value = bytes.toDouble()
+        var unitIndex = -1
+        while (value >= 1_024 && unitIndex < units.lastIndex) {
+            value /= 1_024
+            unitIndex++
+        }
+        val formatted = String.format(Locale.US, "%.1f", value).trimEnd('0').trimEnd('.')
+        return "$formatted ${units[unitIndex]}"
+    }
+
+    private fun formatDuration(milliseconds: Long): String = when {
+        milliseconds < 1_000 -> "${milliseconds} 毫秒前"
+        milliseconds < 60_000 -> "${milliseconds / 1_000} 秒前"
+        else -> "${milliseconds / 60_000} 分钟前"
+    }
 
     private fun summarizeSearchAppsResult(json: JSONObject): String {
         val apps = json.optJSONArray("apps") ?: return "未找到匹配应用"
@@ -433,7 +776,10 @@ internal class AgentTraceFormatter {
     }
 
     private fun terminalOutputPreview(output: String, truncated: Boolean): String? {
-        val normalized = output.trim()
+        val normalized = output
+            .sanitizeDisplayText()
+            .redactDisplaySecrets()
+            .trim()
         if (normalized.isEmpty()) return null
         val allLines = normalized.lines()
         var preview = allLines.take(MAX_TERMINAL_PREVIEW_LINES).joinToString("\n")
@@ -507,11 +853,19 @@ internal class AgentTraceFormatter {
         }
 
     private fun sanitizeSummaryValue(value: String, maxChars: Int = 80): String =
-        value.replace(Regex("\\s+"), " ")
+        value.sanitizeDisplayText()
+            .redactDisplaySecrets()
+            .replace(Regex("\\s+"), " ")
             .trim()
             .replace(',', '，')
             .replace('=', '＝')
             .let { if (it.length <= maxChars) it else it.take(maxChars) + "..." }
+
+    private fun sanitizeMcpIdentity(value: String, maxChars: Int): String =
+        sanitizeSummaryValue(value, maxChars).replace(" · ", " • ")
+
+    private fun sanitizeErrorCode(value: String): String? =
+        value.trim().takeIf { it.matches(ERROR_CODE) }
 
     private fun safeHttpHost(rawUrl: String): String? =
         rawUrl.trim()
@@ -638,16 +992,31 @@ internal class AgentTraceFormatter {
         const val MAX_TERMINAL_PREVIEW_LINES = 3
         const val MAX_TERMINAL_PREVIEW_CHARS = 240
         const val MAX_MODIFIED_FILE_PATH_CHARS = 4_096
+        const val MAX_MCP_SERVER_CHARS = 48
+        const val MAX_MCP_TOOL_CHARS = 64
+        const val MAX_MCP_PREVIEW_LINES = 6
+        const val MAX_MCP_PREVIEW_CHARS = 1_200
+        val ERROR_CODE = Regex("[A-Z][A-Z0-9_]{0,79}")
+        val BASE64_DATA_URL = Regex("data:[^\\s,;]+;base64,[A-Za-z0-9+/=]+")
+        val ANSI_ESCAPE = Regex("\\u001B\\[[0-?]*[ -/]*[@-~]")
+        val BIDI_CONTROLS = Regex("[\\u200E\\u200F\\u202A-\\u202E\\u2066-\\u2069]")
         val FILE_MUTATION_TOOL_NAMES = setOf("write_file", "edit_file")
+        val SENSITIVE_JSON_FIELD = Regex(
+            """(?i)("(?:api[_-]?key|x-api-key|access[_-]?key|secret[_-]?key|private[_-]?key|access[_-]?token|refresh[_-]?token|auth[_-]?token|id[_-]?token|session[_-]?token|token|password|passwd|secret|client[_-]?secret|authorization|proxy-authorization|set-cookie|cookie)"\s*:\s*)("(?:\\.|[^"\\])*"|[^,\]\}\s]+)"""
+        )
         val SENSITIVE_ASSIGNMENT = Regex(
             """(?i)\b([A-Z0-9_]*(?:API[_-]?KEY|ACCESS[_-]?TOKEN|AUTH[_-]?TOKEN|TOKEN|PASSWORD|PASSWD|SECRET)[A-Z0-9_]*)\s*=\s*(?:"[^"]*"|'[^']*'|[^\s;&|]+)"""
+        )
+        val SENSITIVE_KEY_VALUE = Regex(
+            """(?i)\b((?:password|passwd|token|api[_-]?key|x-api-key|access[_-]?key|secret[_-]?key|private[_-]?key|session[_-]?token|client[_-]?secret|set-cookie|cookie)\s*:\s*)(?:"(?:\\.|[^"\\])*"|'[^']*'|[^\s;&|]+)"""
         )
         val SENSITIVE_FLAG = Regex(
             """(?i)(--?(?:password|passwd|token|api[-_]?key|secret)(?:\s*=\s*|\s+))(?:"[^"]*"|'[^']*'|[^\s;&|]+)"""
         )
         val SENSITIVE_HEADER = Regex(
-            """(?i)\b(Authorization|Proxy-Authorization|X-Api-Key)(\s*:\s*)[^'"\r\n;&|]+"""
+            """(?i)\b(Authorization|Proxy-Authorization|X-Api-Key)(\s*:\s*)(?:"(?:\\.|[^"\\])*"|'[^']*'|(?:Bearer|Basic)\s+[^\s'";&|]+|[^\s'";&|]+)"""
         )
+        val BEARER_TOKEN = Regex("""(?i)\b(Bearer\s+)[A-Za-z0-9._~+/=-]{8,}""")
         val BROWSER_ACTIONS = setOf(
             "navigate",
             "get_readable",
