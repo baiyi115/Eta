@@ -1,5 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <resources>
+  <string name="conversation_stop_and_delete">停止任务并删除</string>
+  <string name="conversation_stop_and_delete_message">此会话的任务将先停止，结果保存后删除会话。</string>
+  <string name="conversation_delete_save_failed">无法保存或确认任务结果，会话尚未删除。</string>
+  <string name="run_waiting_for_gui">等待手机控制权</string>
+  <string name="run_gui_user_paused">用户接管中</string>
+  <string name="tool_release_gui">释放手机操作</string>
+  <string name="tool_release_gui_description">完成当前手机操作阶段，将控制权交给等待中的任务。</string>
+  <string name="browser_clear_shared_data">清除全部浏览器数据</string>
+  <string name="browser_clear_shared_data_message">将关闭全部页面，清除 Cookie、缓存和网站数据，包括登录状态。</string>
+  <string name="browser_user_action_failed">浏览器操作未完成，请重试。</string>
   <string name="permission_local_network_title">局域网访问</string>
   <string name="permission_local_network_summary">用于模型、MCP、内置浏览器和终端访问局域网，请按需授权；不授权仍可访问公网。</string>
   <string name="permission_local_network_denied">尚未授予局域网访问权限。需要连接本地服务时，可前往系统应用权限设置，允许“附近的设备”；公网连接不受影响。</string>
@@ -39,7 +49,6 @@
   <string name="action_open_terminal">打开终端</string>
   <string name="action_open_browser">打开浏览器</string>
   <string name="action_launch_kimi_web">启动 Kimi Web</string>
-  <string name="route_browser">Agent 浏览器</string>
   <string name="route_tools">工具能力</string>
   <string name="route_permissions">权限</string>
   <string name="route_system_enhancements">系统增强</string>
@@ -344,7 +353,6 @@
   <string name="ui_enable_memory_4b69b7">启用记忆</string>
   <string name="ui_enable_device_direct_tools_e2d595">启用设备直达工具</string>
   <string name="ui_back_to_bottom_32282e">回到底部</string>
-  <string name="ui_enter_the_url_in_the_address_bar_or_let_the_agent_br_e2ae90">在地址栏输入网址，或让 Agent 帮你查阅网页。会话只在 Eta 内使用。</string>
   <string name="ui_copy_4edd1d">复制</string>
   <string name="ui_install_087db6">安装</string>
   <string name="ui_convert_google_apps_to_system_apps_0f6d89">将 Google App 转为系统应用</string>
@@ -388,7 +396,6 @@
   <string name="ui_model_provider_e8c7f5">模型提供商</string>
   <string name="ui_model_management_183414">模型管理</string>
   <string name="ui_test_connection_10b7d8">测试连接</string>
-  <string name="ui_the_browser_has_not_opened_the_web_page_yet_31e095">浏览器尚未打开网页</string>
   <string name="ui_browse_the_web_da7afb">浏览网页</string>
   <string name="ui_add_custom_model_a5ddc0">添加自定义模型</string>
   <string name="ui_add_attachment_dba9e8">添加附件</string>
@@ -408,7 +415,7 @@
   <string name="ui_environmental_status_5b32a1">环境状态</string>
   <string name="ui_user_skills_748e7f">用户安装</string>
   <string name="ui_long_press_the_power_button_1958d0">电源键长按</string>
-  <string name="ui_leave_blank_to_use_the_default_mobile_agent_prompt_w_21e7c8">留空使用默认手机 Agent 提示词</string>
+  <string name="ui_leave_blank_to_use_the_default_mobile_agent_prompt_w_21e7c8">你可以在这里告诉 AI 如何与你交流、需要遵循哪些要求，也可以留空。使用角色卡时，会改用角色卡的提示词。</string>
   <string name="ui_knew_cb63c6">知道了</string>
   <string name="ui_remove_image_089db3">移除图片</string>
   <string name="ui_remove_file_reference_04bbfc">移除文件引用</string>
@@ -419,21 +426,17 @@
   <string name="ui_absolute_path_9ac6fc">绝对路径</string>
   <string name="ui_edit_a7f814">编辑</string>
   <string name="ui_edit_model_parameters_ba4864">编辑模型参数</string>
-  <string name="ui_url_or_domain_name_3ee97a">网址或域名</string>
-  <string name="ui_the_webpage_cannot_be_opened_3db06d">网页未能打开</string>
+  <string name="browser_search_or_address">搜索或输入网址</string>
   <string name="ui_automatically_set_default_assistant_f86963">自动设置默认助理</string>
   <string name="ui_memory_b55ff5">记忆</string>
   <string name="ui_set_up_7debf9">设置</string>
-  <string name="ui_access_7f5641">访问</string>
   <string name="ui_input_file_path_36d474">输入文件路径</string>
   <string name="ui_return_11d024">返回</string>
   <string name="ui_connection_configuration_7d057b">连接配置</string>
   <string name="ui_exit_multiple_selection_c194fd">退出多选</string>
-  <string name="ui_reload_5982c4">重新加载</string>
   <string name="ui_regenerate_2e1905">重新生成</string>
   <string name="ui_regenerate_reply_84a7d9">重新生成回复</string>
   <string name="ui_reset_built_in_configuration_35b6ec">重置内置配置</string>
-  <string name="ui_reset_browser_session_791b36">重置浏览器会话</string>
   <string name="ui_lock_screen_evokes_automatic_voice_input_1cde18">锁屏唤起自动语音输入</string>
   <string name="ui_deep_thinking_enabled_by_default_c032d6">默认启用思考</string>
   <string name="tool_tap_area">点击区域</string>
@@ -1099,17 +1102,12 @@
   <string name="skills_delete_summary">删除“%1$s”后需要重新安装才能恢复。</string>
   <string name="skills_no_description">无描述</string>
   <string name="browser_no_external_app">没有应用可以打开当前网页</string>
-  <string name="browser_reset">重置</string>
   <string name="browser_back">后退</string>
   <string name="browser_forward">前进</string>
   <string name="browser_stop_loading">停止加载</string>
   <string name="browser_refresh">刷新</string>
-  <string name="browser_title">Agent 浏览器</string>
   <string name="browser_open_external">用外部应用打开</string>
-  <string name="browser_reset_session">重置会话</string>
-  <string name="browser_user_controlling">你正在操作网页，Agent 已暂停，返回后继续</string>
-  <string name="browser_opening">正在打开网页</string>
-  <string name="browser_opening_host">正在打开 %1$s</string>
+  <string name="browser_close_page">关闭网页</string>
   <string name="model_not_selected">未选择</string>
   <string name="conversation_model_unavailable">此会话原用的模型不可用，已改用 %1$s</string>
   <string name="model_switch_current">切换模型，当前为 %1$s</string>

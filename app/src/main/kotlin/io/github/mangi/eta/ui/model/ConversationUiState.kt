@@ -19,6 +19,7 @@ data class ConversationSummaryUi(
     val mode: ConversationModeUi,
     val isPinned: Boolean = false,
     val isActiveRun: Boolean = false,
+    val runStatus: String? = null,
     val characterName: String? = null,
     val characterAvatarPath: String? = null,
 )

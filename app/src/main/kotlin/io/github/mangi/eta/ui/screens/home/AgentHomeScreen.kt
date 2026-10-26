@@ -3,10 +3,13 @@ package io.github.mangi.eta.ui.screens.home
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.key
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import io.github.mangi.eta.ui.components.AgentChatBody
 import io.github.mangi.eta.ui.components.AgentConversationLoadState
 import io.github.mangi.eta.ui.components.LocalRoleplayChat
+import io.github.mangi.eta.ui.components.LocalAgentBrowserSession
+import io.github.mangi.eta.agent.browser.BrowserSessionRegistry
 import io.github.mangi.eta.ui.components.chatConversationCompositionKey
 import io.github.mangi.eta.ui.model.AgentChatHomeUiState
 import io.github.mangi.eta.ui.model.ConversationHistoryLoadState
@@ -42,7 +45,13 @@ internal fun AgentHomeScreen(
                 modifier = modifier,
             )
         } else {
-            CompositionLocalProvider(LocalRoleplayChat provides state.roleplayChatUi()) {
+            val browser = remember(conversationKey) {
+                BrowserSessionRegistry.get(conversationKey ?: BrowserSessionRegistry.MANUAL_SESSION_KEY)
+            }
+            CompositionLocalProvider(
+                LocalRoleplayChat provides state.roleplayChatUi(),
+                LocalAgentBrowserSession provides browser,
+            ) {
                 AgentChatBody(
                     messages = state.messages,
                     modelPickerState = modelPickerState,

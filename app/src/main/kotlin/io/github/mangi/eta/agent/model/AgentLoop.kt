@@ -95,10 +95,10 @@ internal class AgentLoop(
             } else if (purpose.allowsTools) appendPendingSteeringMessage()
             val roundPurpose = if (finalizingResponse) ProviderRequestPurpose.TOOL_SUMMARY else purpose
 
-            // Anthropic 思考签名绑定发出工具调用时的 system 与 tools；工具结果回传后再刷新目录。
+            // 带签名的工具链沿用发出调用时的请求前缀，工具链完成后再刷新目录。
             val roundTools = if (finalizingResponse) {
                 JSONArray()
-            } else if (AnthropicEphemeralState.hasPendingToolResponse(messages)) {
+            } else if (SignedToolContext.hasPendingResponse(messages)) {
                 precedingTools ?: tools
             } else if (purpose.allowsTools) {
                 toolsForRound?.invoke() ?: tools
@@ -143,6 +143,7 @@ internal class AgentLoop(
                     },
                     onProviderEvent = { attemptRound, providerEvent ->
                         if (!roundPurpose.allowsTools && (providerEvent is ProviderEvent.HostedToolStarted ||
+                                providerEvent is ProviderEvent.SearchSuggestions ||
                                 providerEvent is ProviderEvent.BlockStart && providerEvent.kind == AssistantBlockKind.TOOL_CALL)) {
                             if (finalizingResponse) throw AgentModelFailure(
                                 "TOOL_SUMMARY_TOOL_CALL", false, "整理手机观察结果时模型仍请求工具，已停止；手机会话已释放。",
@@ -506,6 +507,7 @@ internal class AgentLoop(
                 name = name,
                 success = success,
             )
+            is ProviderEvent.SearchSuggestions -> AgentEvent.SearchSuggestions(round, index, html)
             is ProviderEvent.Completed -> null
         }
 

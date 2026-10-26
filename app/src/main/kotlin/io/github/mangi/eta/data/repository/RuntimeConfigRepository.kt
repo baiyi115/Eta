@@ -4,6 +4,7 @@ import android.content.SharedPreferences
 import io.github.mangi.eta.agent.model.AgentModelClient
 import io.github.mangi.eta.config.Prefs
 import io.github.mangi.eta.data.datastore.SettingsDataStore
+import io.github.mangi.eta.data.model.GeminiProviderSetting
 import io.github.mangi.eta.data.model.AnthropicProviderSetting
 import io.github.mangi.eta.data.model.CustomProviderSetting
 import io.github.mangi.eta.data.model.Model
@@ -16,7 +17,7 @@ import io.github.mangi.eta.data.model.ReasoningEffort
 import io.github.mangi.eta.data.model.enabledModel
 import io.github.mangi.eta.data.model.runtimeProviderType
 import io.github.mangi.eta.data.model.selectedOrFirstModel
-import io.github.mangi.eta.data.provider.BuiltinProviders
+import io.github.mangi.eta.data.provider.GeminiModelCapabilities
 import io.github.mangi.eta.data.provider.ProviderSourceRegistry
 import io.github.mangi.eta.data.provider.ProviderConnectionProfile
 import io.github.mangi.eta.data.provider.ReasoningCapabilityResolver
@@ -114,10 +115,7 @@ internal object RuntimeConfigRepository {
         json.encodeToString(if (config.authMode == ProviderAuthModes.API_KEY) config else config.copy(apiKey = ""))
 
     fun buildRuntimeConfig(provider: ProviderSetting, model: Model): AgentModelClient.ModelConfig {
-        val systemPrompt = provider.systemPrompt
-            ?.trim()
-            ?.takeIf { it.isNotBlank() }
-            ?: BuiltinProviders.DEFAULT_SYSTEM_PROMPT
+        val systemPrompt = provider.systemPrompt.orEmpty().trim()
         val sourceType = ProviderSourceRegistry.resolve(provider)
         val profile = ProviderConnectionProfile.forAuthMode(provider.authMode)
         val endpointMode = profile?.endpointMode ?: provider.endpointMode()
@@ -149,6 +147,9 @@ internal object RuntimeConfigRepository {
     }
 
     fun reasoningCapabilities(provider: ProviderSetting, model: Model): ModelReasoningCapabilities? {
+        if (provider is GeminiProviderSetting) {
+            return GeminiModelCapabilities.requestReasoningCapabilities(model.modelId)
+        }
         val sourceType = ProviderSourceRegistry.resolve(provider)
         val inferOpenAiCatalog = sourceType == io.github.mangi.eta.data.model.ProviderSourceTypes.CUSTOM &&
             provider.endpointMode() == OpenAiEndpointMode.RESPONSES
@@ -166,7 +167,7 @@ internal object RuntimeConfigRepository {
     private fun ProviderSetting.endpointMode(): String = when (this) {
         is OpenAiCompatibleProviderSetting -> endpointMode
         is CustomProviderSetting -> endpointMode
-        is AnthropicProviderSetting -> ""
+        is AnthropicProviderSetting, is GeminiProviderSetting -> ""
     }
 
     private fun writeRuntimeConfig(

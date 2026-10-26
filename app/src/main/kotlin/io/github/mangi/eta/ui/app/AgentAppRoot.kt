@@ -67,7 +67,8 @@ import io.github.mangi.eta.ui.pages.providers.CommunityCatalogScreen
 import io.github.mangi.eta.ui.pages.providers.ModelProviderDetailScreen
 import io.github.mangi.eta.ui.pages.providers.ModelProviderListScreen
 import io.github.mangi.eta.ui.screens.backup.DataBackupScreen
-import io.github.mangi.eta.ui.screens.browser.AgentBrowserScreen
+import io.github.mangi.eta.ui.screens.browser.AgentBrowserActivity
+import io.github.mangi.eta.agent.browser.BrowserSessionRegistry
 import io.github.mangi.eta.ui.screens.characters.CharacterDetailScreen
 import io.github.mangi.eta.ui.screens.characters.CharacterEditorScreen
 import io.github.mangi.eta.ui.screens.characters.CharacterLibraryScreen
@@ -264,13 +265,22 @@ fun AgentAppRoot(
     fun selectConversation(conversationId: String) {
         focusManager.clearFocus()
         agentState.selectConversation(conversationId)
+        navigator.popToHome()
         conversationPaneOpen = false
     }
 
     fun createConversation() {
         focusManager.clearFocus()
         agentState.createConversation()
+        navigator.popToHome()
         conversationPaneOpen = false
+    }
+
+    fun openConversationBrowser() {
+        focusManager.clearFocus()
+        val sessionKey = agentState.conversationPaneState.selectedConversationId
+            ?: BrowserSessionRegistry.MANUAL_SESSION_KEY
+        context.startActivity(AgentBrowserActivity.createIntent(context, sessionKey))
     }
 
     @Composable
@@ -309,7 +319,7 @@ fun AgentAppRoot(
             canStopKimiWeb = appViewModel.kimiWebState.canStop,
             onStopKimiWeb = appViewModel::stopKimiWeb,
             onRefreshKimiWeb = appViewModel::refreshKimiWeb,
-            onOpenBrowser = { pushRoute(AppRoute.Browser) },
+            onOpenBrowser = { openConversationBrowser() },
             onSelectConversation = { conversationId -> selectConversation(conversationId) },
             onConversationRename = { conversation ->
                 conversationRenameTarget = conversation
@@ -412,7 +422,7 @@ fun AgentAppRoot(
                                 AgentHomeAction.OpenPermissions -> pushRoute(AppRoute.Permissions)
                                 AgentHomeAction.OpenSystemEnhance -> pushRoute(AppRoute.SystemEnhance)
                                 AgentHomeAction.OpenSettings -> pushRoute(AppRoute.Settings)
-                                AgentHomeAction.OpenBrowser -> pushRoute(AppRoute.Browser)
+                                AgentHomeAction.OpenBrowser -> openConversationBrowser()
                                 AgentHomeAction.ExpandRunTrace -> Unit
                             }
                         },
@@ -423,9 +433,12 @@ fun AgentAppRoot(
                     )
                 }
             }
-            entry<AppRoute.Browser>(swipeDismiss = swipeDismiss) {
-                RoutedShell(route = AppRoute.Browser) {
-                    AgentBrowserScreen()
+            entry<AppRoute.Browser> { route ->
+                // 保留已保存路由的恢复入口；新打开操作直接进入原生浏览器窗口。
+                LaunchedEffect(route) {
+                    context.startActivity(AgentBrowserActivity.createIntent(context, route.sessionKey))
+                    backStack.remove(route)
+                    if (backStack.isEmpty()) backStack.add(AppRoute.Home)
                 }
             }
             entry<AppRoute.Terminal>(swipeDismiss = swipeDismiss) {
@@ -444,7 +457,7 @@ fun AgentAppRoot(
                     onAction = { action ->
                         when (action) {
                             AgentToolsAction.NavigateBack -> popRoute()
-                            AgentToolsAction.OpenBrowser -> pushRoute(AppRoute.Browser)
+                            AgentToolsAction.OpenBrowser -> openConversationBrowser()
                             AgentToolsAction.OpenWebToolsSettings -> pushRoute(AppRoute.WebToolsSettings)
                             AgentToolsAction.OpenEnhancements -> pushRoute(AppRoute.SystemEnhance)
                             AgentToolsAction.OpenPermissions -> pushRoute(AppRoute.Permissions)
@@ -811,14 +824,17 @@ fun AgentAppRoot(
             show = true,
             cornerRadius = DialogDefaults.CornerRadius,
             title = stringResource(R.string.conversation_delete_title),
-            summary = stringResource(R.string.conversation_delete_message),
+            summary = stringResource(if (conversation.isActiveRun) R.string.conversation_stop_and_delete_message else R.string.conversation_delete_message),
             onDismissRequest = { conversationDeleteTarget = null },
         ) {
             MiuixDialogActions(
-                confirmText = stringResource(R.string.action_delete),
+                confirmText = stringResource(if (conversation.isActiveRun) R.string.conversation_stop_and_delete else R.string.action_delete),
                 destructive = true,
                 onCancel = { conversationDeleteTarget = null },
                 onConfirm = {
+                    if ((backStack.lastOrNull() as? AppRoute.Browser)?.sessionKey == conversation.id) {
+                        navigator.popToHome()
+                    }
                     agentState.deleteConversation(conversation.id)
                     conversationDeleteTarget = null
                 },

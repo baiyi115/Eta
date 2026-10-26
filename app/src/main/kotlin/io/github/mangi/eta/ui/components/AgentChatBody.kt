@@ -76,7 +76,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import io.github.mangi.eta.R
-import io.github.mangi.eta.agent.browser.AgentBrowserSession
+import io.github.mangi.eta.agent.browser.BrowserSessionSnapshot
 import io.github.mangi.eta.data.model.ReasoningEffort
 import io.github.mangi.eta.ui.app.AgentConversationRevisionReducer
 import io.github.mangi.eta.ui.app.LocalBlurEnabled
@@ -182,7 +182,8 @@ internal fun AgentChatBody(
     val density = LocalDensity.current
     val imeBottomPx = WindowInsets.ime.getBottom(density)
     val isKeyboardVisible = imeBottomPx > 0
-    val browserSnapshot by AgentBrowserSession.snapshots.collectAsState()
+    val browserSnapshot = LocalAgentBrowserSession.current?.snapshots?.collectAsState()?.value
+        ?: BrowserSessionSnapshot()
     val contextUsage = remember(messages, modelPickerState.selectedModel) {
         latestContextUsage(messages, modelPickerState.selectedModel)
     }
