@@ -1,5 +1,10 @@
 name: Eta Build
-run-name: ${{ github.event.head_commit.message || github.ref_name }}
+run-name: >-
+  ${{ github.event.head_commit &&
+      startsWith(github.event.head_commit.message, 'Merge ') &&
+      format('Merge · {0}', github.ref_name) ||
+      github.event.head_commit.message ||
+      github.ref_name }}
 
 on:
   push:
