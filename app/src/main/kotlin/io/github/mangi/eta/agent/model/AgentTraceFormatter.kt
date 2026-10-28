@@ -1,5 +1,8 @@
 package io.github.mangi.eta.agent.model
 
+import io.github.mangi.eta.agent.subagent.AgentSubagentToolCatalog
+import io.github.mangi.eta.agent.subagent.SubagentActivitySnapshot
+import io.github.mangi.eta.agent.subagent.SubagentProfile
 import java.net.URI
 import java.security.MessageDigest
 import java.util.Locale
@@ -35,7 +38,7 @@ internal class AgentTraceFormatter {
             "get_clipboard" -> "读取剪贴板"
             "search_apps" -> summarizeQueryArguments("搜索应用", toolCall.argumentsJson)
             "launch_app" -> "打开应用"
-            "get_current_context" -> "读取当前上下文"
+            "get_current_context" -> "读取时间与位置"
             "observe_screen" -> summarizeObservationArguments(toolCall.argumentsJson)
             "tap" -> summarizePointArguments("点击屏幕", toolCall.argumentsJson)
             "long_press" -> summarizePointArguments("长按屏幕", toolCall.argumentsJson)
@@ -52,6 +55,8 @@ internal class AgentTraceFormatter {
             "wait_for_package" -> "等待应用就绪"
             "open_system_panel" -> "打开系统面板"
             "read_image" -> "查看图片"
+            AgentSubagentToolCatalog.TOOL_NAME -> summarizeSubagentArguments(toolCall.argumentsJson)
+            AgentSubagentToolCatalog.PROFILE_TOOL_NAME -> summarizeSubagentProfileArguments(toolCall.argumentsJson)
             AgentConversationToolCatalog.READ_HISTORY -> "读取当前会话历史"
             "memory_get", "character_memory_get" -> summarizeMemoryGetArguments(toolCall.argumentsJson)
             "memory_write", "character_memory_write" -> summarizeMemoryWriteArguments(toolCall.argumentsJson)
@@ -78,7 +83,9 @@ internal class AgentTraceFormatter {
 
     /** 命令以脱敏后的用户可见投影进入运行轨迹；日志仍只记录长度。 */
     fun displayCommand(toolCall: AgentModelClient.ToolCall): String? =
-        if (toolCall.name in AgentTerminalToolCatalog.names || toolCall.name == "run_command") {
+        if (toolCall.name == AgentSubagentToolCatalog.TOOL_NAME) {
+            SubagentActivitySnapshot.initialFromArguments(toolCall.argumentsJson)?.encode()
+        } else if (toolCall.name in AgentTerminalToolCatalog.names || toolCall.name == "run_command") {
             runCatching {
                 JSONObject(toolCall.argumentsJson)
                     .optString("command")
@@ -326,14 +333,27 @@ internal class AgentTraceFormatter {
         if (toolName.startsWith("mcp_")) return summarizeMcpResult(json, result)
         if (json?.optString("status") == "unconfirmed") return "操作已提交，效果未确认"
         if (!isSuccessResult(result)) return summarizeFailure(json)
+        if (json != null) {
+            // 本机工具的细节摘要优先；未覆盖的工具交给分类 Formatter 或通用摘要。
+            summarizeToolResult(toolName, json, result)?.let { return it }
+            val summary = AgentDeviceResultFormatter.summarize(toolName, json)
+                ?: AgentPhoneResultFormatter.summarize(toolName, json)
+                ?: AgentFileResultFormatter.summarize(toolName, json)
+            if (summary != null) return summary
+        }
         return when (toolName) {
             BROWSER_TOOL_NAME -> json?.let(::summarizeBrowserResult) ?: "浏览器操作完成"
+            AgentSubagentToolCatalog.TOOL_NAME -> json?.let(::summarizeSubagentResult) ?: "完成"
+            AgentSubagentToolCatalog.PROFILE_TOOL_NAME -> json?.let(::summarizeSubagentProfileResult) ?: "完成"
             AgentConversationToolCatalog.READ_HISTORY -> "已读取历史分页"
             "memory_get", "memory_write", "character_memory_get", "character_memory_write" ->
                 json?.let { summarizeMemoryResult(toolName, it) } ?: "完成"
             "search_apps" -> json?.let(::summarizeSearchAppsResult) ?: "完成"
             "launch_app" -> json?.let(::summarizeLaunchAppResult) ?: "已打开"
-            else -> json?.let { summarizeToolResult(toolName, it, result) } ?: "完成"
+            "skills_list", "skills_list_curated", "skills_inspect_github", "skills_install_from_github" -> json?.let {
+                summarizeSkillResult(toolName, it) ?: summarizeGenericResult(it, result)
+            } ?: "完成"
+            else -> json?.let { summarizeGenericResult(it, result) } ?: "完成"
         }
     }
 
@@ -463,10 +483,9 @@ internal class AgentTraceFormatter {
         toolName: String,
         json: JSONObject,
         result: AgentModelClient.ToolResult,
-    ): String = when (toolName) {
+    ): String? = when (toolName) {
         "device_status" -> summarizeDeviceStatus(json)
         "network_info" -> summarizeNetworkInfo(json)
-        "get_current_context" -> summarizeCurrentContext(json)
         "get_current_location" -> summarizeCurrentLocation(json)
         "get_device_environment" -> summarizeDeviceEnvironment(json)
         "get_clipboard" -> summarizeTextResult("已读取剪贴板", json.optString("text"), json)
@@ -478,7 +497,7 @@ internal class AgentTraceFormatter {
         "skills_read" -> summarizeSkillReadResult(json)
         "skills_read_resource" -> summarizeSkillResourceResult(json)
         "get_logcat" -> summarizeLogcatResult(json)
-        else -> summarizeGenericResult(json, result)
+        else -> null
     }
 
     private fun summarizeDeviceStatus(json: JSONObject): String = buildList {
@@ -525,14 +544,6 @@ internal class AgentTraceFormatter {
         if (connected && json.has("metered") && !json.isNull("metered")) {
             add(if (json.optBoolean("metered")) "计费网络" else "非计费网络")
         }
-    }.joinToString(" · ")
-
-    private fun summarizeCurrentContext(json: JSONObject): String = buildList {
-        add("当前上下文")
-        json.optString("weekday").let(::sanitizeSummaryValue).takeIf(String::isNotBlank)?.let(::add)
-        json.optString("timezone").let(::sanitizeSummaryValue).takeIf(String::isNotBlank)?.let(::add)
-        val location = json.optJSONObject("location")
-        if (location?.optString("status")?.isNotBlank() == true) add("位置不可用")
     }.joinToString(" · ")
 
     private fun summarizeCurrentLocation(json: JSONObject): String = buildList {
@@ -720,6 +731,56 @@ internal class AgentTraceFormatter {
         milliseconds < 1_000 -> "${milliseconds} 毫秒前"
         milliseconds < 60_000 -> "${milliseconds / 1_000} 秒前"
         else -> "${milliseconds / 60_000} 分钟前"
+    }
+
+    private fun summarizeSubagentArguments(argumentsJson: String): String = runCatching {
+        val args = JSONObject(argumentsJson)
+        val resumeId = sanitizeSummaryValue(args.optString("resume"), 32)
+        val subagentType = sanitizeSummaryValue(args.optString("subagent_type"), 32)
+            .lowercase()
+            .ifBlank { if (resumeId.isNotBlank()) "subagent" else SubagentProfile.DEFAULT_TYPE }
+        val description = sanitizeSummaryValue(args.optString("description"), MAX_QUERY_SUMMARY_CHARS)
+        listOfNotNull(
+            subagentType,
+            description.takeIf { it.isNotBlank() },
+        ).joinToString(" · ").ifBlank { "Subagent" }
+    }.getOrDefault("Subagent")
+
+    private fun summarizeSubagentResult(json: JSONObject): String {
+        val toolCalls = json.optInt("tool_calls", 0)
+        return if (toolCalls > 0) "完成 · $toolCalls 次工具调用" else "完成"
+    }
+
+    private fun summarizeSubagentProfileArguments(argumentsJson: String): String = runCatching {
+        val args = JSONObject(argumentsJson)
+        val action = args.optString("action").trim().lowercase()
+        val name = sanitizeSummaryValue(args.optString("name"), 32)
+        val label = when (action) {
+            "save" -> "保存 Subagent"
+            "delete" -> "删除 Subagent"
+            "get" -> "读取 Subagent"
+            else -> "查看 Subagent 列表"
+        }
+        if (name.isNotBlank() && action != "list") "$label · $name" else label
+    }.getOrDefault("管理 Subagent")
+
+    private fun summarizeSubagentProfileResult(json: JSONObject): String =
+        when (json.optString("action")) {
+            "save" -> listOfNotNull("已保存", json.optString("name").takeIf(String::isNotBlank)).joinToString(" · ")
+            "delete" -> listOfNotNull("已删除", json.optString("name").takeIf(String::isNotBlank)).joinToString(" · ")
+            "list" -> "${json.optJSONArray("profiles")?.length() ?: 0} 个 Subagent"
+            else -> "完成"
+        }
+
+    private fun summarizeSkillResult(toolName: String, json: JSONObject): String? {
+        if (toolName == "skills_install_from_github") {
+            val installed = json.optJSONArray("installed") ?: return null
+            return "已安装 ${installed.length()} 个技能" +
+                if (json.optString("available") == "next_turn") " · 下一轮可用" else ""
+        }
+        val items = json.optJSONArray("items") ?: return null
+        val installed = (0 until items.length()).count { items.optJSONObject(it)?.opt("installed") == true }
+        return "找到 ${items.length()} 个技能" + if (installed > 0) " · $installed 个已安装" else ""
     }
 
     private fun summarizeSearchAppsResult(json: JSONObject): String {
@@ -989,8 +1050,8 @@ internal class AgentTraceFormatter {
         const val MAX_DISPLAY_COMMAND_CHARS = 4_000
         const val MAX_QUERY_SUMMARY_CHARS = 30
         const val MAX_LISTED_APP_NAMES = 3
-        const val MAX_TERMINAL_PREVIEW_LINES = 3
-        const val MAX_TERMINAL_PREVIEW_CHARS = 240
+        const val MAX_TERMINAL_PREVIEW_LINES = 10
+        const val MAX_TERMINAL_PREVIEW_CHARS = 800
         const val MAX_MODIFIED_FILE_PATH_CHARS = 4_096
         const val MAX_MCP_SERVER_CHARS = 48
         const val MAX_MCP_TOOL_CHARS = 64
