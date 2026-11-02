@@ -22,7 +22,6 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.provider.Settings
-import android.speech.SpeechRecognizer
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
@@ -174,11 +173,10 @@ internal class EtaAssistantOverlayService : Service(), LifecycleOwner, SavedStat
                 if (state.preview.isNotBlank()) inputText = state.preview
                 speechState = EtaSpeechState(
                     phase = state.phase,
-                    // 连接、聆听、识别中的阶段播报由语音条目与波形承担，反馈条只保留
-                    // 错误和空闲态的模型下载消息，避免与语音界面重复叙事。
-                    message = state.error ?: state.progress.takeIf { it.isNotBlank() && state.phase == EtaSpeechPhase.IDLE },
-                    downloadAvailable = state.downloadAvailable,
-                    configureAvailable = state.error != null && !state.downloadAvailable,
+                    // 连接、聆听、识别中的阶段播报由语音条目与波形承担，反馈条只保留错误提示，
+                    // 避免与语音界面重复叙事。
+                    message = state.error,
+                    configureAvailable = state.configureAvailable,
                     feedbackIsError = state.error != null,
                     holdToTalk = speechHeld && state.active,
                 )
@@ -345,12 +343,16 @@ internal class EtaAssistantOverlayService : Service(), LifecycleOwner, SavedStat
                                 presentEntryInput()
                             }
                         },
-                        onInputFocus = { entryInputPending = false },
+                        onInputFocus = {
+                            entryInputPending = false
+                            if (!speechState.active && speechState.hasFeedback) {
+                                speechState = EtaSpeechState()
+                            }
+                        },
                         speechLevel = { speechLevel },
                         onMicrophone = ::startSpeech,
                         onCancelSpeech = ::cancelSpeech,
                         onFinishSpeech = { speechInput.finish() },
-                        onDownloadModel = { speechInput.downloadModel() },
                         onOpenSpeechSettings = {
                             openSpeechSettings(this)
                             dismissAndStop()
@@ -358,7 +360,12 @@ internal class EtaAssistantOverlayService : Service(), LifecycleOwner, SavedStat
                         onKeyboard = ::switchToKeyboard,
                         input = inputText,
                         inputFocusRequestKey = inputFocusRequestKey,
-                        onInputChange = { inputText = it },
+                        onInputChange = {
+                            inputText = it
+                            if (!speechState.active && speechState.hasFeedback) {
+                                speechState = EtaSpeechState()
+                            }
+                        },
                         onSuggestionClick = ::submitPrompt,
                         onSubmit = ::submitInput,
                         onStop = ::stopCurrentRun,

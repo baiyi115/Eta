@@ -2,21 +2,25 @@ package io.github.mangi.eta.agent.voice
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -34,10 +38,12 @@ import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Text
 
 private val assistantSuggestions = listOf(
-    "帮我总结当前屏幕内容",
-    "这个页面怎么操作",
-    "屏幕上有什么值得注意的信息",
+    "总结屏幕内容",
+    "解释当前页面",
+    "提取关键信息",
 )
+
+private val suggestionEnterEasing = CubicBezierEasing(0.22f, 1f, 0.36f, 1f)
 
 @Composable
 internal fun EtaAssistantSuggestions(
@@ -52,40 +58,39 @@ internal fun EtaAssistantSuggestions(
         enter = EnterTransition.None,
         exit = shrinkVertically(
             shrinkTowards = Alignment.Bottom,
-            animationSpec = tween(180, easing = FastOutSlowInEasing),
-        ) + fadeOut(tween(140)),
+            animationSpec = tween(150, easing = FastOutSlowInEasing),
+        ) + fadeOut(tween(110)),
     ) {
-        Column(
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+                .horizontalScroll(rememberScrollState())
+                .padding(bottom = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
+            Spacer(modifier = Modifier.width(10.dp))
             assistantSuggestions.forEachIndexed { index, suggestion ->
-                val transform = remember(suggestion) { Animatable(0f) }
+                val progress = remember(suggestion) { Animatable(0f) }
                 val opacity = remember(suggestion) { Animatable(0f) }
                 LaunchedEffect(visible) {
                     if (visible) {
-                        transform.snapTo(0f)
+                        progress.snapTo(0f)
                         opacity.snapTo(0f)
-                        delay(900L + when (index) {
-                            0 -> 200L
-                            1 -> 117L
-                            else -> 0L
-                        })
+                        if (index > 0) delay(index * 40L)
                         coroutineScope {
                             launch {
-                                transform.animateTo(
+                                progress.animateTo(
                                     targetValue = 1f,
-                                    animationSpec = spring(dampingRatio = 0.7f, stiffness = 109.66f),
+                                    animationSpec = tween(220, easing = suggestionEnterEasing),
                                 )
                             }
-                            launch { opacity.animateTo(1f, tween(350)) }
+                            launch { opacity.animateTo(1f, tween(180, easing = FastOutSlowInEasing)) }
                         }
                     } else {
                         coroutineScope {
-                            launch { transform.animateTo(0f, tween(140)) }
-                            launch { opacity.animateTo(0f, tween(140)) }
+                            launch { progress.animateTo(0f, tween(110)) }
+                            launch { opacity.animateTo(0f, tween(110)) }
                         }
                     }
                 }
@@ -94,20 +99,18 @@ internal fun EtaAssistantSuggestions(
                         .height(34.dp)
                         .graphicsLayer {
                             alpha = opacity.value
-                            scaleX = transform.value
-                            scaleY = transform.value
-                            translationY = (1f - transform.value) * 18.dp.toPx()
+                            translationY = (1f - progress.value) * 6.dp.toPx()
                         }
                         .clip(CircleShape)
-                        .background(colors.input)
+                        .background(colors.chipBackground)
                         .border(0.75.dp, colors.chipStroke, CircleShape)
                         .clickable(enabled = visible) { onSuggestionClick(suggestion) }
-                        .padding(horizontal = 14.dp),
+                        .padding(horizontal = 13.dp),
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
                         text = suggestion,
-                        color = colors.inputPrimary,
+                        color = colors.inputSecondary,
                         fontSize = 13.sp,
                         lineHeight = 18.sp,
                         maxLines = 1,
@@ -115,6 +118,7 @@ internal fun EtaAssistantSuggestions(
                     )
                 }
             }
+            Spacer(modifier = Modifier.width(10.dp))
         }
     }
 }

@@ -2,6 +2,7 @@ package io.github.mangi.eta.agent.voice
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.animateDpAsState
@@ -49,6 +50,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
@@ -69,7 +72,6 @@ import kotlin.math.abs
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
-import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.anim.folmeSpring
@@ -100,6 +102,7 @@ internal data class EtaVoicePanelColors(
     val content: Color,
     val input: Color,
     val focusedInput: Color,
+    val chipBackground: Color,
     val inputPrimary: Color,
     val inputSecondary: Color,
     val inputTertiary: Color,
@@ -107,6 +110,7 @@ internal data class EtaVoicePanelColors(
     val panelStroke: Color,
     val chipStroke: Color,
     val scrim: Color,
+    val bottomBackdrop: Color,
 )
 
 @Composable
@@ -115,29 +119,33 @@ private fun rememberEtaVoicePanelColors(): EtaVoicePanelColors {
     return remember(dark) {
         if (dark) {
             EtaVoicePanelColors(
-                content = Color(0xFF1E1E1E),
-                input = Color(0xFF34363B),
-                focusedInput = Color(0xFF42444A),
-                inputPrimary = Color(0xE6FFFFFF),
-                inputSecondary = Color(0x8AFFFFFF),
-                inputTertiary = Color(0x4DFFFFFF),
-                tertiary = Color(0x40FFFFFF),
-                panelStroke = Color(0x0AFFFFFF),
-                chipStroke = Color(0x21FFFFFF),
-                scrim = Color(0x52000000),
+                content = Color(0xFF16171A),
+                input = Color(0xF2222429),
+                focusedInput = Color(0xFF2B2E35),
+                chipBackground = Color(0xE6222429),
+                inputPrimary = Color(0xF0FFFFFF),
+                inputSecondary = Color(0x9EFFFFFF),
+                inputTertiary = Color(0x52FFFFFF),
+                tertiary = Color(0x38FFFFFF),
+                panelStroke = Color(0x14FFFFFF),
+                chipStroke = Color(0x18FFFFFF),
+                scrim = Color(0x48000000),
+                bottomBackdrop = Color(0xF50E0F12),
             )
         } else {
             EtaVoicePanelColors(
-                content = Color(0xFFF0F1F2),
-                input = Color(0xFFF4F5F7),
+                content = Color(0xFFFAFAFC),
+                input = Color(0xFAFFFFFF),
                 focusedInput = Color.White,
-                inputPrimary = Color(0xE6000000),
-                inputSecondary = Color(0x8A000000),
-                inputTertiary = Color(0x42000000),
-                tertiary = Color(0x29000000),
-                panelStroke = Color.White,
-                chipStroke = Color(0x14000000),
-                scrim = Color(0x30000000),
+                chipBackground = Color(0xF5FFFFFF),
+                inputPrimary = Color(0xE6111318),
+                inputSecondary = Color(0x8F111318),
+                inputTertiary = Color(0x4D111318),
+                tertiary = Color(0x24111318),
+                panelStroke = Color(0xCCFFFFFF),
+                chipStroke = Color(0x12000000),
+                scrim = Color(0x26000000),
+                bottomBackdrop = Color(0xFAF2F3F7),
             )
         }
     }
@@ -157,7 +165,6 @@ internal fun EtaVoicePanel(
     onMicrophone: (holdToTalk: Boolean) -> Unit,
     onCancelSpeech: () -> Unit,
     onFinishSpeech: () -> Unit,
-    onDownloadModel: () -> Unit,
     onOpenSpeechSettings: () -> Unit,
     onKeyboard: () -> Unit,
     inputFocusRequestKey: Int,
@@ -179,31 +186,46 @@ internal fun EtaVoicePanel(
     val scrimProgress = remember { Animatable(0f) }
     val contentVisible = recognitionEnabled != null && (recognitionEnabled || entranceComplete)
     val contentReady by rememberUpdatedState(onContentReady)
-    val textEntryOffsetPx = with(density) { if (recognitionEnabled == false) 16.dp.toPx() else 0f }
+    val textEntryOffsetPx = with(density) { if (recognitionEnabled == false) 12.dp.toPx() else 0f }
     val exitAlpha by animateFloatAsState(
         targetValue = if (exitRequested) 0f else 1f,
         animationSpec = tween(220, easing = FastOutSlowInEasing),
         label = "assistant_exit",
     )
+    val backdropAlpha by animateFloatAsState(
+        targetValue = if (contentVisible && !speech.active && state.messages.isEmpty()) 1f else 0f,
+        animationSpec = tween(200, easing = FastOutSlowInEasing),
+        label = "assistant_bottom_backdrop",
+    )
+    val imeInsets = WindowInsets.ime
+    val navigationInsets = WindowInsets.navigationBars
 
     LaunchedEffect(Unit) {
-        delay(180)
-        scrimProgress.animateTo(1f, tween(280, easing = LinearOutSlowInEasing))
+        delay(80)
+        scrimProgress.animateTo(1f, tween(220, easing = LinearOutSlowInEasing))
     }
 
     LaunchedEffect(contentVisible) {
         if (!contentVisible) return@LaunchedEffect
+        val enterEasing = CubicBezierEasing(0.22f, 1f, 0.36f, 1f)
         coroutineScope {
             launch {
-                entryAlpha.animateTo(1f, tween(
-                    durationMillis = if (recognitionEnabled == false) 360 else 220,
-                    easing = FastOutSlowInEasing,
-                ))
+                entryAlpha.animateTo(
+                    1f,
+                    tween(
+                        durationMillis = if (recognitionEnabled == false) 210 else 180,
+                        easing = FastOutSlowInEasing,
+                    ),
+                )
             }
             launch {
-                entryProgress.animateTo(1f,
-                    if (recognitionEnabled == false) folmeSpring(damping = 1f, response = 0.50f)
-                    else tween(220, easing = LinearOutSlowInEasing))
+                entryProgress.animateTo(
+                    1f,
+                    tween(
+                        durationMillis = if (recognitionEnabled == false) 240 else 200,
+                        easing = enterEasing,
+                    ),
+                )
             }
         }
         // 焦点会主动唤起 IME；必须等显现和位移都结束，不能在仍透明时交出输入焦点。
@@ -214,7 +236,33 @@ internal fun EtaVoicePanel(
         modifier = Modifier
             .fillMaxSize()
             .graphicsLayer { alpha = exitAlpha }
-            .drawBehind { drawRect(colors.scrim.copy(alpha = colors.scrim.alpha * scrimProgress.value)) },
+            .drawBehind {
+                drawRect(colors.scrim.copy(alpha = colors.scrim.alpha * scrimProgress.value))
+                val backdrop = scrimProgress.value * backdropAlpha
+                if (backdrop > 0f) {
+                    val bottomInsetPx = maxOf(
+                        imeInsets.getBottom(this),
+                        navigationInsets.getBottom(this),
+                    ).toFloat()
+                    // 渐变顶边随软键盘同步上移，覆盖建议胶囊与输入栏区域，隔离底层页面文字干扰。
+                    val contentBandPx = 188.dp.toPx()
+                    val startY = (size.height - bottomInsetPx - contentBandPx).coerceAtLeast(0f)
+                    val solidY = (size.height - bottomInsetPx - 84.dp.toPx()).coerceIn(startY + 1f, size.height)
+                    val solidStop = ((solidY - startY) / (size.height - startY).coerceAtLeast(1f)).coerceIn(0.25f, 0.85f)
+                    drawRect(
+                        brush = Brush.verticalGradient(
+                            0f to Color.Transparent,
+                            solidStop * 0.55f to colors.bottomBackdrop.copy(alpha = colors.bottomBackdrop.alpha * 0.68f * backdrop),
+                            solidStop to colors.bottomBackdrop.copy(alpha = colors.bottomBackdrop.alpha * backdrop),
+                            1f to colors.bottomBackdrop.copy(alpha = colors.bottomBackdrop.alpha * backdrop),
+                            startY = startY,
+                            endY = size.height,
+                        ),
+                        topLeft = Offset(0f, startY),
+                        size = Size(size.width, size.height - startY),
+                    )
+                }
+            },
     ) {
         Box(
             modifier = Modifier
@@ -244,12 +292,10 @@ internal fun EtaVoicePanel(
                     translationY = (1f - entryProgress.value) * textEntryOffsetPx
                 },
         ) {
-            val imeInsets = WindowInsets.ime
-            val navigationInsets = WindowInsets.navigationBars
             val keyboardVisible by remember(density, imeInsets, navigationInsets) {
                 derivedStateOf { imeInsets.getBottom(density) > navigationInsets.getBottom(density) }
             }
-            val navigationBottom = WindowInsets.navigationBars.getBottom(density)
+            val navigationBottom = navigationInsets.getBottom(density)
             val statusTop = WindowInsets.statusBars.getTop(density)
             val imeOverlap = if (state.messages.isEmpty()) 0
                 else (imeInsets.getBottom(density) - navigationBottom).coerceAtLeast(0)
@@ -266,7 +312,6 @@ internal fun EtaVoicePanel(
                 onMicrophone = onMicrophone,
                 onCancelSpeech = onCancelSpeech,
                 onFinishSpeech = onFinishSpeech,
-                onDownloadModel = onDownloadModel,
                 onOpenSpeechSettings = onOpenSpeechSettings,
                 onKeyboard = onKeyboard,
                 colors = colors,
@@ -308,7 +353,6 @@ private fun BoxScope.AssistantPanel(
     onMicrophone: (holdToTalk: Boolean) -> Unit,
     onCancelSpeech: () -> Unit,
     onFinishSpeech: () -> Unit,
-    onDownloadModel: () -> Unit,
     onOpenSpeechSettings: () -> Unit,
     onKeyboard: () -> Unit,
     colors: EtaVoicePanelColors,
@@ -335,19 +379,16 @@ private fun BoxScope.AssistantPanel(
     var handoffPullPx by remember { mutableFloatStateOf(0f) }
     var thresholdHapticSent by remember { mutableStateOf(false) }
     var keepBottomAnchored by remember { mutableStateOf(true) }
-    var fittedReplyId by remember { mutableStateOf<String?>(null) }
     // 满高时把手与状态栏之间的空间有限，需在扣除触摸 slop 后仍能完成过顶手势。
     val handoffThresholdPx = with(density) { 24.dp.toPx() }
     val dismissThresholdPx = with(density) { 92.dp.toPx() }
-    val autoSettleTolerancePx = with(density) { 8.dp.toPx() }
-    val overflowTolerancePx = with(density) { 16.dp.toPx() }
+    val autoSettleTolerancePx = with(density) { 6.dp.toPx() }
     val minimumContentHeightPx = with(density) { 140.dp.toPx() }.coerceAtMost(maxContentHeightPx)
     val dragHandleHeightPx = with(density) { 38.dp.toPx() }
     val contentFitSlackPx = with(density) { 12.dp.toPx() }
     val mediumHeightPx = baseContentHeightPx +
         (maxContentHeightPx - baseContentHeightPx) * 0.58f
     val hasMessages = state.messages.isNotEmpty()
-    val latestMessageId = state.messages.lastOrNull()?.id
     val targetHeightPx = if (hasMessages) {
         if (settledHeightPx <= 0f) baseContentHeightPx
         else settledHeightPx.coerceIn(minimumContentHeightPx, maxContentHeightPx)
@@ -357,11 +398,8 @@ private fun BoxScope.AssistantPanel(
     val animatedHeightPx by animateFloatAsState(
         targetValue = targetHeightPx,
         animationSpec = when {
-            !autoExpandSuppressed &&
-                abs(settledHeightPx - baseContentHeightPx) > autoSettleTolerancePx ->
-                folmeSpring(damping = 1f, response = 0.72f)
             autoExpandSuppressed -> folmeSpring(damping = 1f, response = 0.38f)
-            else -> folmeSpring(damping = 1f, response = 0.50f)
+            else -> folmeSpring(damping = 1f, response = 0.46f)
         },
         label = "assistant_content_height",
     )
@@ -399,66 +437,33 @@ private fun BoxScope.AssistantPanel(
             else settledHeightPx.coerceIn(minimumContentHeightPx, maxContentHeightPx)
         } else {
             autoExpandSuppressed = false
-            fittedReplyId = null
             0f
         }
     }
-    LaunchedEffect(state.phase, latestMessageId) {
-        if (state.phase == EtaVoicePhase.PROCESSING) fittedReplyId = null
-    }
-    // 回复中按真实溢出逐级升高；回复结束且全部条目可测量时交给一次性内容拟合。
-    LaunchedEffect(hasMessages, state.phase, latestMessageId, keyboardVisible, baseContentHeightPx, maxContentHeightPx, listState) {
+    // 单向连续生长：随实测内容高度平滑推高面板（弹簧保持速度连续），只增不减，
+    // 避免分档等待造成的顿挫以及流式结束后的二次弹起与回落。
+    LaunchedEffect(hasMessages, keyboardVisible, baseContentHeightPx, maxContentHeightPx, listState) {
         if (!hasMessages || keyboardVisible) return@LaunchedEffect
         snapshotFlow {
-            !autoExpandSuppressed &&
-                fittedReplyId != latestMessageId &&
-                draggedHeightPx == null &&
-                !handoffRunning &&
-                keepBottomAnchored &&
-                abs(currentAnimatedHeight.value - settledHeightPx) <= autoSettleTolerancePx &&
-                run {
-                    val measuredHeightPx = measuredConversationHeightPx(listState)
-                    if (state.phase != EtaVoicePhase.PROCESSING && measuredHeightPx != null) {
-                        false
-                    } else if (measuredHeightPx != null) {
-                        measuredHeightPx > listState.layoutInfo.viewportSize.height + overflowTolerancePx
-                    } else {
-                        listState.canScrollBackward || listState.canScrollForward
-                    }
-                }
-        }
-            .distinctUntilChanged()
-            .collect { overflowAtRest ->
-                if (!overflowAtRest) return@collect
-                val nextHeight = when {
-                    settledHeightPx < baseContentHeightPx - autoSettleTolerancePx -> baseContentHeightPx
-                    settledHeightPx < mediumHeightPx - autoSettleTolerancePx -> mediumHeightPx
-                    settledHeightPx < maxContentHeightPx - autoSettleTolerancePx -> maxContentHeightPx
-                    else -> null
-                }
-                if (nextHeight != null) settledHeightPx = nextHeight
+            if (autoExpandSuppressed || draggedHeightPx != null || handoffRunning || !keepBottomAnchored) {
+                return@snapshotFlow null
             }
-    }
-    // 完成排版后本轮只拟合一次；列表的旧滚动偏移不能把它再次推回高档。
-    LaunchedEffect(hasMessages, state.phase, latestMessageId, keyboardVisible, maxContentHeightPx, listState) {
-        if (!hasMessages || state.phase == EtaVoicePhase.PROCESSING || keyboardVisible) return@LaunchedEffect
-        snapshotFlow {
-            if (autoExpandSuppressed || fittedReplyId == latestMessageId ||
-                draggedHeightPx != null || handoffRunning ||
-                !keepBottomAnchored ||
-                abs(currentAnimatedHeight.value - settledHeightPx) > autoSettleTolerancePx
-            ) return@snapshotFlow null
-            val contentHeightPx = measuredConversationHeightPx(listState) ?: return@snapshotFlow null
-            (dragHandleHeightPx + contentHeightPx + contentFitSlackPx)
-                .coerceIn(minimumContentHeightPx, maxContentHeightPx)
+            requiredPanelHeightPx(
+                listState = listState,
+                currentAnimatedHeightPx = currentAnimatedHeight.value,
+                settledHeightPx = settledHeightPx,
+                dragHandleHeightPx = dragHandleHeightPx,
+                contentFitSlackPx = contentFitSlackPx,
+                autoSettleTolerancePx = autoSettleTolerancePx,
+                baseContentHeightPx = baseContentHeightPx,
+                maxContentHeightPx = maxContentHeightPx,
+            )
         }
             .distinctUntilChanged()
-            .collectLatest { fittedHeightPx ->
-                val targetHeightPx = fittedHeightPx ?: return@collectLatest
-                delay(500)
-                fittedReplyId = latestMessageId
-                if (abs(settledHeightPx - targetHeightPx) > autoSettleTolerancePx) {
-                    settledHeightPx = targetHeightPx
+            .collect { requiredHeightPx ->
+                val target = requiredHeightPx ?: return@collect
+                if (target > settledHeightPx + autoSettleTolerancePx) {
+                    settledHeightPx = target
                 }
             }
     }
@@ -673,7 +678,7 @@ private fun BoxScope.AssistantPanel(
         EtaAssistantSuggestions(
             onSuggestionClick = onSuggestionClick,
             colors = colors,
-            visible = !hasMessages,
+            visible = !hasMessages && !speech.hasFeedback,
         )
         AssistantComposer(
             state = state,
@@ -685,7 +690,6 @@ private fun BoxScope.AssistantPanel(
             onMicrophone = onMicrophone,
             onCancelSpeech = onCancelSpeech,
             onFinishSpeech = onFinishSpeech,
-            onDownloadModel = onDownloadModel,
             onOpenSpeechSettings = onOpenSpeechSettings,
             onKeyboard = onKeyboard,
             keyboardVisible = keyboardVisible,
@@ -696,10 +700,10 @@ private fun BoxScope.AssistantPanel(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(
-                    start = 16.dp,
-                    end = 16.dp,
-                    top = 8.dp,
-                    bottom = 10.dp,
+                    start = 18.dp,
+                    end = 18.dp,
+                    top = 4.dp,
+                    bottom = 14.dp,
                 ),
         )
     }
@@ -738,14 +742,31 @@ private fun DragHandle(
     }
 }
 
-private fun measuredConversationHeightPx(listState: LazyListState): Float? {
+private fun requiredPanelHeightPx(
+    listState: LazyListState,
+    currentAnimatedHeightPx: Float,
+    settledHeightPx: Float,
+    dragHandleHeightPx: Float,
+    contentFitSlackPx: Float,
+    autoSettleTolerancePx: Float,
+    baseContentHeightPx: Float,
+    maxContentHeightPx: Float,
+): Float? {
     val layout = listState.layoutInfo
-    if (layout.totalItemsCount == 0) return null
+    if (layout.totalItemsCount == 0 || layout.viewportSize.height <= 0) return null
     val first = layout.visibleItemsInfo.firstOrNull() ?: return null
     val last = layout.visibleItemsInfo.lastOrNull() ?: return null
-    if (first.index != 0 || last.index != layout.totalItemsCount - 1) return null
-    return (last.offset + last.size - first.offset +
+    val visibleSpanPx = (last.offset + last.size - first.offset +
         layout.beforeContentPadding + layout.afterContentPadding).toFloat()
+    val allItemsVisible = first.index == 0 && last.index == layout.totalItemsCount - 1
+    val requiredContentHeightPx = if (allItemsVisible) {
+        dragHandleHeightPx + visibleSpanPx + contentFitSlackPx
+    } else if (currentAnimatedHeightPx >= settledHeightPx - autoSettleTolerancePx) {
+        maxContentHeightPx
+    } else {
+        dragHandleHeightPx + visibleSpanPx + contentFitSlackPx
+    }
+    return requiredContentHeightPx.coerceIn(baseContentHeightPx, maxContentHeightPx)
 }
 
 private fun assistantBaseHeightPx(

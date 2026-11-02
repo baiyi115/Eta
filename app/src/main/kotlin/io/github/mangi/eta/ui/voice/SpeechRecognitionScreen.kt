@@ -53,7 +53,6 @@ internal fun SpeechRecognitionScreen(onBack: () -> Unit, onOpenOss: () -> Unit) 
             EtaPreferenceGroup {
                 EtaSwitchPreference(
                     title = stringResource(R.string.speech_recognition_enabled),
-                    summary = stringResource(R.string.speech_recognition_enabled_summary),
                     checked = settings.recognitionEnabled,
                     onCheckedChange = { store.edit(settings.copy(recognitionEnabled = it)) },
                 )
@@ -78,7 +77,6 @@ internal fun SpeechRecognitionScreen(onBack: () -> Unit, onOpenOss: () -> Unit) 
                     SpeechNote(
                         stringResource(
                             when (settings.asr) {
-                                AsrProvider.SYSTEM -> R.string.speech_asr_note_system
                                 AsrProvider.QWEN_REALTIME, AsrProvider.DOUBAO -> R.string.speech_asr_note_streaming
                                 AsrProvider.QWEN_FLASH -> R.string.speech_asr_note_flash
                                 AsrProvider.QWEN_FILE -> R.string.speech_asr_note_file
@@ -87,12 +85,10 @@ internal fun SpeechRecognitionScreen(onBack: () -> Unit, onOpenOss: () -> Unit) 
                     )
                 }
             }
-            if (settings.asr != AsrProvider.SYSTEM) {
-                item(key = "connection") {
-                    SpeechConnectionSection(store, synthesis = false)
-                }
+            item(key = "connection") {
+                SpeechConnectionSection(store, synthesis = false)
             }
-            if (settings.asr != AsrProvider.SYSTEM && settings.asr != AsrProvider.DOUBAO) {
+            if (settings.asr != AsrProvider.DOUBAO) {
                 item(key = "language") {
                     EtaPreferenceGroup {
                         SpeechFieldColumn {
@@ -141,7 +137,7 @@ internal fun SpeechRecognitionScreen(onBack: () -> Unit, onOpenOss: () -> Unit) 
     }
 }
 
-/** 短音频与文件转写只在录音结束后识别，没有停顿判定，因此只对流式与系统识别提供自动发送。 */
+/** 短音频与文件转写只在录音结束后识别，没有停顿判定，因此只对流式识别提供自动发送。 */
 @Composable
 private fun SpeechResultSection(store: SpeechSettingsStore) {
     val settings = store.settings
@@ -204,15 +200,6 @@ private fun SpeechRecognitionTestSection(store: SpeechSettingsStore) {
                         EtaTextButton(
                             text = stringResource(R.string.action_cancel),
                             onClick = { store.recognition.cancel() },
-                            minWidth = 0.dp,
-                            minHeight = 34.dp,
-                            cornerRadius = 17.dp,
-                            insideMargin = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
-                        )
-                    } else if (state.downloadAvailable) {
-                        EtaTextButton(
-                            text = stringResource(R.string.voice_download_model),
-                            onClick = { store.recognition.downloadModel() },
                             minWidth = 0.dp,
                             minHeight = 34.dp,
                             cornerRadius = 17.dp,

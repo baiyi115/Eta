@@ -81,10 +81,53 @@ class EtaVoicePanelTouchTest {
     }
 
     @Test
+    fun streamingReplyGrowsMonotonicallyWithoutPostCompletionBounceOrDrop() = withPanel { panel ->
+        for (lineCount in listOf(4, 10, 18)) {
+            panel.state.value = EtaVoiceUiState(
+                messages = listOf(
+                    AgentMessageUi(
+                        id = "reply",
+                        content = (1..lineCount).joinToString("\n") { "Eta 流式回复第 $it 行" },
+                        renderMarkdown = false,
+                        isStreaming = true,
+                    ),
+                ),
+                phase = EtaVoicePhase.PROCESSING,
+            )
+            panel.advance(12)
+        }
+        panel.advance(60)
+        val topBeforeComplete = panel.handleBounds().top
+        panel.state.value = EtaVoiceUiState(
+            messages = listOf(
+                AgentMessageUi(
+                    id = "reply",
+                    content = (1..18).joinToString("\n") { "Eta 流式回复第 $it 行" },
+                    renderMarkdown = false,
+                    isStreaming = false,
+                ),
+            ),
+            phase = EtaVoicePhase.READY,
+        )
+        var minTopAfterComplete = topBeforeComplete
+        var maxTopAfterComplete = topBeforeComplete
+        repeat(90) {
+            panel.advance(1)
+            val top = panel.handleBounds().top
+            minTopAfterComplete = minOf(minTopAfterComplete, top)
+            maxTopAfterComplete = maxOf(maxTopAfterComplete, top)
+        }
+        assertTrue(
+            "流式结束后不应再大幅向上弹起或向下回落：before=$topBeforeComplete min=$minTopAfterComplete max=$maxTopAfterComplete",
+            maxTopAfterComplete <= topBeforeComplete + 1f,
+        )
+    }
+
+    @Test
     fun disabledRecognitionWaitsForBothWakeAndContentRevealBeforeKeyboard() =
         withPanel(recognitionEnabled = false, initialFrames = 1) { panel ->
             panel.gainWindowFocus()
-            panel.advance(20)
+            panel.advance(10)
             assertEquals(0, panel.entrances)
             assertEquals(0, panel.keyboardShows)
             assertFalse(panel.hasTextInput())
@@ -96,7 +139,7 @@ class EtaVoicePanelTouchTest {
             assertEquals("输入栏尚在显现时不能交接焦点，实际显现耗时=${panel.revealDurationMs}", 0, panel.contentReveals)
             assertEquals(0, panel.keyboardShows)
             panel.advanceUntil { panel.contentReveals == 1 }
-            assertTrue("显现应形成可感知的独立阶段", panel.revealDurationMs >= 300)
+            assertTrue("显现应形成可感知的独立阶段", panel.revealDurationMs >= 200)
             panel.advance(8)
             assertEquals(1, panel.contentReveals)
             assertTrue("入场结束后输入框应取得焦点", panel.textInputFocused())
@@ -245,7 +288,6 @@ class EtaVoicePanelTouchTest {
                             onMicrophone = { microphoneStarts++ },
                             onCancelSpeech = {},
                             onFinishSpeech = {},
-                            onDownloadModel = {},
                             onOpenSpeechSettings = {},
                             onKeyboard = {},
                             inputFocusRequestKey = inputFocusRequestKey.value,

@@ -25,14 +25,15 @@ import kotlin.math.max
 import kotlin.math.sin
 
 private const val POWER_BUTTON_HEIGHT_RATIO = 0.358f
-private const val POWER_HALO_HOLD_SECONDS = 0.08f
-private const val POWER_HALO_MOVE_SECONDS = 0.624f
-private const val POWER_HALO_END_SECONDS = 0.92f
-private const val EDGE_TRAIL_START_SECONDS = 0.17f
-internal const val ASSISTANT_EDGE_ARRIVAL_MS = 270L
-private const val BOTTOM_REVEAL_SECONDS = 0.30f
+private const val POWER_HALO_HOLD_SECONDS = 0.06f
+private const val POWER_HALO_MOVE_SECONDS = 0.48f
+private const val POWER_HALO_END_SECONDS = 0.68f
+private const val EDGE_TRAIL_START_SECONDS = 0.11f
+internal const val ASSISTANT_EDGE_ARRIVAL_MS = 220L
+private const val BOTTOM_REVEAL_SECONDS = 0.20f
 private val edgeArrivalSeconds = ASSISTANT_EDGE_ARRIVAL_MS / 1000f
 private val bottomRevealEndSeconds = edgeArrivalSeconds + BOTTOM_REVEAL_SECONDS
+private val wakeHandoffSeconds = bottomRevealEndSeconds
 private val entranceDurationSeconds = max(POWER_HALO_END_SECONDS, bottomRevealEndSeconds)
 private val haloEasing = CubicBezierEasing(0.33f, 0f, 0.67f, 1f)
 private val powerWashColor = Color(0xFF9BB2D2).copy(alpha = 0.36f)
@@ -55,11 +56,12 @@ internal fun EtaAssistantEdgeGlow(
     onEntranceFinished: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var entranceNotified by remember { mutableStateOf(false) }
     var firstWakeComplete by remember { mutableStateOf(false) }
     val entranceFinished by rememberUpdatedState(onEntranceFinished)
     val opacity = animateFloatAsState(
         targetValue = if (active || !firstWakeComplete) 1f else 0f,
-        animationSpec = tween(if (active || !firstWakeComplete) 110 else 220),
+        animationSpec = tween(if (active || !firstWakeComplete) 110 else 200),
         label = "assistant_edge_glow",
     )
     var seconds by remember { mutableFloatStateOf(0f) }
@@ -70,9 +72,12 @@ internal fun EtaAssistantEdgeGlow(
             withFrameNanos { now ->
                 if (clock[0] == 0L) clock[0] = now
                 seconds = (now - clock[0]) / 1_000_000_000f
+                if (!entranceNotified && seconds >= wakeHandoffSeconds) {
+                    entranceNotified = true
+                    entranceFinished()
+                }
                 if (!firstWakeComplete && seconds >= entranceDurationSeconds) {
                     firstWakeComplete = true
-                    entranceFinished()
                 }
             }
             if (!active && firstWakeComplete) break

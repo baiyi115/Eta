@@ -3,7 +3,7 @@ package io.github.mangi.eta.data.model
 import kotlinx.serialization.Serializable
 
 @Serializable
-enum class AsrProvider { SYSTEM, QWEN_REALTIME, QWEN_FLASH, QWEN_FILE, DOUBAO }
+enum class AsrProvider { QWEN_REALTIME, QWEN_FLASH, QWEN_FILE, DOUBAO }
 
 @Serializable
 enum class TtsProvider { NONE, QWEN, DOUBAO, GEMINI, MINIMAX }
@@ -68,7 +68,7 @@ data class SpeechOssConfig(
 
 @Serializable
 data class SpeechSettings(
-    val asr: AsrProvider = AsrProvider.SYSTEM,
+    val asr: AsrProvider = AsrProvider.QWEN_REALTIME,
     val tts: TtsProvider = TtsProvider.NONE,
     val autoSpeak: Boolean = false,
     /** 聊天页回答完成后自动朗读最终回答；与助手浮窗的自动播报分开保存。 */

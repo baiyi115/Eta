@@ -241,6 +241,7 @@ internal class AgentRuntimeRunExecutor(
                 skillPackageInstaller = skillPackageInstaller,
                 runAvailableSkillIds = skillContext.installedSkills.mapTo(mutableSetOf()) { it.id },
                 pendingSkillConflict = pendingSkillConflict,
+                virtualDisplayEnabled = { currentPermissions().virtualDisplay },
             )
             val routingExecutor = RoutingToolExecutor(
                 local = executor,

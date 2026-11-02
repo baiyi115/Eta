@@ -38,6 +38,7 @@ internal class AgentTraceFormatter {
             "get_clipboard" -> "读取剪贴板"
             "search_apps" -> summarizeQueryArguments("搜索应用", toolCall.argumentsJson)
             "launch_app" -> "打开应用"
+            "present_to_user" -> "呈现到主屏"
             "get_current_context" -> "读取时间与位置"
             "observe_screen" -> summarizeObservationArguments(toolCall.argumentsJson)
             "tap" -> summarizePointArguments("点击屏幕", toolCall.argumentsJson)
@@ -350,6 +351,7 @@ internal class AgentTraceFormatter {
                 json?.let { summarizeMemoryResult(toolName, it) } ?: "完成"
             "search_apps" -> json?.let(::summarizeSearchAppsResult) ?: "完成"
             "launch_app" -> json?.let(::summarizeLaunchAppResult) ?: "已打开"
+            "present_to_user" -> json?.let(::summarizePresentToUserResult) ?: "已呈现到主屏"
             "skills_list", "skills_list_curated", "skills_inspect_github", "skills_install_from_github" -> json?.let {
                 summarizeSkillResult(toolName, it) ?: summarizeGenericResult(it, result)
             } ?: "完成"
@@ -804,7 +806,14 @@ internal class AgentTraceFormatter {
 
     private fun summarizeLaunchAppResult(json: JSONObject): String {
         val appName = sanitizeSummaryValue(json.optString("app_name"))
-        return if (appName.isNotBlank()) "已打开 · $appName" else "已打开"
+        val virtual = json.optString("canvas") == "virtual"
+        val base = if (appName.isNotBlank()) "已打开 · $appName" else "已打开"
+        return if (virtual) "$base · 虚拟屏" else base
+    }
+
+    private fun summarizePresentToUserResult(json: JSONObject): String {
+        val appName = sanitizeSummaryValue(json.optString("app_name"))
+        return if (appName.isNotBlank()) "已呈现到主屏 · $appName" else "已呈现到主屏"
     }
 
     /**

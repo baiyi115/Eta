@@ -31,7 +31,11 @@ internal object SettingsDataStore {
     private val SPEECH_SETTINGS = stringPreferencesKey("speech_settings_v1")
     private val WEB_TOOLS_SETTINGS = stringPreferencesKey("web_tools_settings_v1")
     private val SUBAGENT_SETTINGS = stringPreferencesKey("subagent_settings_v1")
-    private val speechJson = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+    private val speechJson = Json {
+        ignoreUnknownKeys = true
+        encodeDefaults = true
+        coerceInputValues = true
+    }
 
     fun speechSettingsFlow(): Flow<SpeechSettings> {
         ensureInitialized()

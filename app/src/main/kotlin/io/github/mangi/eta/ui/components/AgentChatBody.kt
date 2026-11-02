@@ -772,8 +772,10 @@ internal fun AgentConversationMessages(
                                 message.id == currentBrowserMessageId,
                             showCopyAction = message !is AgentMessageUi ||
                                 message.characterEditable || message.id in finalResultMessageIds,
-                            showMessageActions = message.id in finalResultMessageIds ||
-                                (message is AgentMessageUi && message.characterEditable),
+                            showMessageActions = !assistantOverlay && (
+                                message.id in finalResultMessageIds ||
+                                    (message is AgentMessageUi && message.characterEditable)
+                                ),
                             messageActionsEnabled = messageActionsEnabled,
                             isEditing = message.id == editTargetMessageId,
                             onEditMessage = onEditMessage,

@@ -86,6 +86,7 @@ import androidx.compose.ui.unit.sp
 import io.github.mangi.eta.ui.markdown.MarkdownTone
 import io.github.mangi.eta.ui.markdown.StaticMarkdown
 import io.github.mangi.eta.R
+import io.github.mangi.eta.agent.virtualdisplay.VirtualDisplaySnapshot
 import kotlinx.coroutines.delay
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Icon
@@ -132,7 +133,17 @@ internal data class ScreenCornerRadii(val topLeft: Float, val topRight: Float, v
 }
 
 @Composable
-internal fun AgentOverlayGlow(state: AgentOverlayState, corners: ScreenCornerRadii) {
+internal fun AgentOverlayGlow(
+    state: AgentOverlayState,
+    corners: ScreenCornerRadii,
+    virtualDisplay: VirtualDisplaySnapshot = VirtualDisplaySnapshot.Inactive,
+) {
+    if (virtualDisplay.materializingToMain) {
+        VirtualDisplayMaterializeOverlay(snapshot = virtualDisplay, corners = corners)
+        return
+    }
+    // 后台虚拟屏激活时，物理屏幕属于用户，不绘制四边流光。
+    if (virtualDisplay.active) return
     val phase = state.phase
     if (phase != AgentOverlayPhase.RUNNING && phase != AgentOverlayPhase.PAUSED) return
     val running = phase == AgentOverlayPhase.RUNNING
@@ -292,6 +303,8 @@ internal fun AgentResultCard(
     state: AgentOverlayState,
     onClose: () -> Unit,
     onOpenEta: () -> Unit,
+    hasVirtualDisplayApp: Boolean = false,
+    onOpenVirtualApp: (() -> Unit)? = null,
 ) {
     var visible by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { visible = true }
@@ -432,14 +445,26 @@ internal fun AgentResultCard(
                     }
                 }
 
-                ResultCardActions(content = content, onOpenEta = onOpenEta, onDone = ::close)
+                ResultCardActions(
+                    content = content,
+                    onOpenEta = onOpenEta,
+                    onDone = ::close,
+                    hasVirtualDisplayApp = hasVirtualDisplayApp,
+                    onOpenVirtualApp = onOpenVirtualApp,
+                )
             }
         }
     }
 }
 
 @Composable
-private fun ResultCardActions(content: String, onOpenEta: () -> Unit, onDone: () -> Unit) {
+private fun ResultCardActions(
+    content: String,
+    onOpenEta: () -> Unit,
+    onDone: () -> Unit,
+    hasVirtualDisplayApp: Boolean = false,
+    onOpenVirtualApp: (() -> Unit)? = null,
+) {
     @Suppress("DEPRECATION")
     val clipboard = LocalClipboardManager.current
     var copied by remember { mutableStateOf(false) }
@@ -453,7 +478,7 @@ private fun ResultCardActions(content: String, onOpenEta: () -> Unit, onDone: ()
         modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 14.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        // 复制是图标按钮，主次两个文字按钮分别是"完成"（留在当前应用）与"回到 Eta"（查看完整过程）。
+        // 复制是图标按钮，主次两个文字按钮分别是"完成"（留在当前应用）与"回到 Eta"或"打开画面"。
         IconButton(
             onClick = {
                 clipboard.setText(AnnotatedString(content))
@@ -477,13 +502,23 @@ private fun ResultCardActions(content: String, onOpenEta: () -> Unit, onDone: ()
             modifier = Modifier.weight(1f),
             minHeight = 44.dp,
         )
-        TextButton(
-            text = stringResource(R.string.overlay_result_open_eta),
-            onClick = onOpenEta,
-            modifier = Modifier.weight(1f),
-            minHeight = 44.dp,
-            colors = ButtonDefaults.textButtonColorsPrimary(),
-        )
+        if (hasVirtualDisplayApp && onOpenVirtualApp != null) {
+            TextButton(
+                text = stringResource(R.string.overlay_result_open_virtual_app),
+                onClick = onOpenVirtualApp,
+                modifier = Modifier.weight(1f),
+                minHeight = 44.dp,
+                colors = ButtonDefaults.textButtonColorsPrimary(),
+            )
+        } else {
+            TextButton(
+                text = stringResource(R.string.overlay_result_open_eta),
+                onClick = onOpenEta,
+                modifier = Modifier.weight(1f),
+                minHeight = 44.dp,
+                colors = ButtonDefaults.textButtonColorsPrimary(),
+            )
+        }
     }
 }
 

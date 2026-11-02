@@ -61,13 +61,15 @@ internal fun validateSpeechSettings(settings: SpeechSettings, secrets: SpeechCre
             }
         }
     } else when (settings.asr) {
-        AsrProvider.SYSTEM -> Unit
         AsrProvider.DOUBAO -> {
             required(secrets.doubaoAsr, "豆包识别凭据")
             speechBaseUrl(settings.doubaoAsr.baseUrl)
             if (settings.doubaoAsr.legacyAuth) required(settings.doubaoAsr.appId, "豆包 App ID")
         }
-        else -> {
+        AsrProvider.QWEN_REALTIME,
+        AsrProvider.QWEN_FLASH,
+        AsrProvider.QWEN_FILE,
+        -> {
             required(secrets.qwenAsr, "千问识别 API Key")
             speechBaseUrl(settings.qwenAsr.endpoint())
             if (settings.asr == AsrProvider.QWEN_FILE) {

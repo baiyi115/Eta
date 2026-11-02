@@ -7,22 +7,35 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class SpeechSettingsTest {
-    private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+    private val json = Json {
+        ignoreUnknownKeys = true
+        encodeDefaults = true
+        coerceInputValues = true
+    }
 
-    @Test fun oldSettingsPreserveSystemRecognitionAndSilentOutput() {
+    @Test fun legacySystemRecognitionMigratesToDefaultOnlineProviderAndPreservesOtherSettings() {
         val config = json.decodeFromString<SpeechSettings>("{}")
-        assertEquals(AsrProvider.SYSTEM, config.asr)
+        assertEquals(AsrProvider.QWEN_REALTIME, config.asr)
         assertEquals(TtsProvider.NONE, config.tts)
         assertFalse(config.autoSpeak)
         assertTrue(config.recognitionEnabled)
-        validateSpeechSettings(config, SpeechCredentials(), synthesis = false)
+        assertThrows(SpeechFailure::class.java) {
+            validateSpeechSettings(config, SpeechCredentials(), synthesis = false)
+        }
+        val legacy = json.decodeFromString<SpeechSettings>(
+            """{"asr":"SYSTEM","tts":"DOUBAO","autoSpeak":true,"refineTranscript":true}""",
+        )
+        assertEquals(AsrProvider.QWEN_REALTIME, legacy.asr)
+        assertEquals(TtsProvider.DOUBAO, legacy.tts)
+        assertTrue(legacy.autoSpeak)
+        assertTrue(legacy.refineTranscript)
     }
 
     @Test fun switchingServicesPreservesIndependentConfigurations() {
         val config = SpeechSettings(asr = AsrProvider.QWEN_REALTIME, tts = TtsProvider.DOUBAO,
             qwenAsr = QwenSpeechConfig(SpeechRegion.SINGAPORE),
             doubaoTts = DoubaoSpeechConfig(legacyAuth = true, appId = "test-app"), qwenVoice = "custom-voice")
-        val changed = config.copy(asr = AsrProvider.SYSTEM, tts = TtsProvider.NONE)
+        val changed = config.copy(asr = AsrProvider.DOUBAO, tts = TtsProvider.NONE)
         assertEquals(changed, json.decodeFromString<SpeechSettings>(json.encodeToString(changed)))
         assertEquals(config.qwenAsr, changed.qwenAsr)
         assertEquals(config.doubaoTts, changed.doubaoTts)
