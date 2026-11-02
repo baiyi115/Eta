@@ -36,6 +36,8 @@ internal object VirtualDisplayInput {
     private var motionNoFocusChangeFlag: Int = 0
     private var failure: String = ""
 
+    // 只运行在 Root 桥进程：hidden API 由特权 UID 直接调用，与 LSPosed 钩子里的反射同属预期用法。
+    @android.annotation.SuppressLint("BlockedPrivateApi")
     fun configure(context: Context) {
         if (configured) return
         synchronized(this) {

@@ -1,10 +1,5 @@
 name: Eta Build
-run-name: >-
-  ${{ github.event.head_commit &&
-      startsWith(github.event.head_commit.message, 'Merge ') &&
-      format('Merge · {0}', github.ref_name) ||
-      github.event.head_commit.message ||
-      github.ref_name }}
+# 不设 run-name：GitHub 默认使用推送提交的标题行，避免提交正文把运行标题撑成多行。
 
 on:
   push:

@@ -263,13 +263,13 @@ internal class RootShellDeviceController(
     }
 
     fun tap(x: Int, y: Int, displayId: Int = Display.DEFAULT_DISPLAY): String {
+        if (AgentAccessibilityService.current() == null && !rootAvailable()) return accessibilityUnavailable()
         validatePoint(x, y, displayId)
         // 后台虚拟屏优先走 Root 桥的定向注入：事件带 displayId 与 NO_FOCUS_CHANGE，不依赖无障碍手势。
         if (CanvasRoutingPolicy.isVirtualDisplay(displayId) && VirtualDisplayController.injectTouch(displayId, x, y)) {
             waitForUiSettle("tap")
             return JSONObject().put("ok", true).put("tool", "tap").put("executor", "input_manager").toString()
         }
-        if (AgentAccessibilityService.current() == null && !rootAvailable()) return accessibilityUnavailable()
         AgentAccessibilityService.current()?.let { service ->
             val result = service.gestureTap(x.toFloat(), y.toFloat(), displayId = displayId)
             if (result.ok) {
@@ -285,6 +285,7 @@ internal class RootShellDeviceController(
     }
 
     fun longPress(x: Int, y: Int, durationMs: Int, displayId: Int = Display.DEFAULT_DISPLAY): String {
+        if (AgentAccessibilityService.current() == null && !rootAvailable()) return accessibilityUnavailable()
         validatePoint(x, y, displayId)
         val duration = durationMs.coerceIn(300, 3_000)
         if (CanvasRoutingPolicy.isVirtualDisplay(displayId) &&
@@ -294,7 +295,6 @@ internal class RootShellDeviceController(
             return JSONObject().put("ok", true).put("tool", "long_press")
                 .put("executor", "input_manager").put("method", "GESTURE_LONG_PRESS").toString()
         }
-        if (AgentAccessibilityService.current() == null && !rootAvailable()) return accessibilityUnavailable()
         AgentAccessibilityService.current()?.let { service ->
             val result = service.gestureTap(x.toFloat(), y.toFloat(), duration.toLong(), displayId = displayId)
             if (result.ok) {
@@ -317,6 +317,7 @@ internal class RootShellDeviceController(
         durationMs: Int,
         displayId: Int = Display.DEFAULT_DISPLAY,
     ): String {
+        if (AgentAccessibilityService.current() == null && !rootAvailable()) return accessibilityUnavailable()
         validatePoint(x1, y1, displayId)
         validatePoint(x2, y2, displayId)
         val duration = durationMs.coerceIn(100, 2_000)
@@ -326,7 +327,6 @@ internal class RootShellDeviceController(
             waitForUiSettle("swipe")
             return JSONObject().put("ok", true).put("tool", "swipe").put("executor", "input_manager").toString()
         }
-        if (AgentAccessibilityService.current() == null && !rootAvailable()) return accessibilityUnavailable()
         AgentAccessibilityService.current()?.let { service ->
             val result = service.gestureSwipe(
                 x1.toFloat(),
