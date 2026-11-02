@@ -263,8 +263,13 @@ internal class RootShellDeviceController(
     }
 
     fun tap(x: Int, y: Int, displayId: Int = Display.DEFAULT_DISPLAY): String {
-        if (AgentAccessibilityService.current() == null && !rootAvailable()) return accessibilityUnavailable()
         validatePoint(x, y, displayId)
+        // 后台虚拟屏优先走 Root 桥的定向注入：事件带 displayId 与 NO_FOCUS_CHANGE，不依赖无障碍手势。
+        if (CanvasRoutingPolicy.isVirtualDisplay(displayId) && VirtualDisplayController.injectTouch(displayId, x, y)) {
+            waitForUiSettle("tap")
+            return JSONObject().put("ok", true).put("tool", "tap").put("executor", "input_manager").toString()
+        }
+        if (AgentAccessibilityService.current() == null && !rootAvailable()) return accessibilityUnavailable()
         AgentAccessibilityService.current()?.let { service ->
             val result = service.gestureTap(x.toFloat(), y.toFloat(), displayId = displayId)
             if (result.ok) {
@@ -280,9 +285,16 @@ internal class RootShellDeviceController(
     }
 
     fun longPress(x: Int, y: Int, durationMs: Int, displayId: Int = Display.DEFAULT_DISPLAY): String {
-        if (AgentAccessibilityService.current() == null && !rootAvailable()) return accessibilityUnavailable()
         validatePoint(x, y, displayId)
         val duration = durationMs.coerceIn(300, 3_000)
+        if (CanvasRoutingPolicy.isVirtualDisplay(displayId) &&
+            VirtualDisplayController.injectTouch(displayId, x, y, durationMs = duration)
+        ) {
+            waitForUiSettle("long_press")
+            return JSONObject().put("ok", true).put("tool", "long_press")
+                .put("executor", "input_manager").put("method", "GESTURE_LONG_PRESS").toString()
+        }
+        if (AgentAccessibilityService.current() == null && !rootAvailable()) return accessibilityUnavailable()
         AgentAccessibilityService.current()?.let { service ->
             val result = service.gestureTap(x.toFloat(), y.toFloat(), duration.toLong(), displayId = displayId)
             if (result.ok) {
@@ -305,10 +317,16 @@ internal class RootShellDeviceController(
         durationMs: Int,
         displayId: Int = Display.DEFAULT_DISPLAY,
     ): String {
-        if (AgentAccessibilityService.current() == null && !rootAvailable()) return accessibilityUnavailable()
         validatePoint(x1, y1, displayId)
         validatePoint(x2, y2, displayId)
         val duration = durationMs.coerceIn(100, 2_000)
+        if (CanvasRoutingPolicy.isVirtualDisplay(displayId) &&
+            VirtualDisplayController.injectSwipe(displayId, x1, y1, x2, y2, duration)
+        ) {
+            waitForUiSettle("swipe")
+            return JSONObject().put("ok", true).put("tool", "swipe").put("executor", "input_manager").toString()
+        }
+        if (AgentAccessibilityService.current() == null && !rootAvailable()) return accessibilityUnavailable()
         AgentAccessibilityService.current()?.let { service ->
             val result = service.gestureSwipe(
                 x1.toFloat(),
@@ -523,6 +541,24 @@ internal class RootShellDeviceController(
         val normalized = button.uppercase()
         if (normalized == "PASTE" && !rootAvailable()) return rootRequired()
         val isVirtual = CanvasRoutingPolicy.isVirtualDisplay(displayId)
+        if (isVirtual) {
+            // 虚拟屏上的导航键必须定向发送，否则 GLOBAL_ACTION / cmd statusbar 会作用到物理主屏。
+            val navKeyCode = when (normalized) {
+                "BACK" -> 4
+                "HOME" -> 3
+                "RECENTS" -> 187
+                else -> -1
+            }
+            if (navKeyCode > 0 && VirtualDisplayController.injectKey(displayId, navKeyCode)) {
+                waitForUiSettle("press_key")
+                return JSONObject()
+                    .put("ok", true)
+                    .put("tool", "press_key")
+                    .put("button", normalized)
+                    .put("executor", "input_manager")
+                    .toString()
+            }
+        }
         AgentAccessibilityService.current()?.let { service ->
             when (normalized) {
                 "BACK", "HOME", "RECENTS", "NOTIFICATIONS", "QUICK_SETTINGS" -> {

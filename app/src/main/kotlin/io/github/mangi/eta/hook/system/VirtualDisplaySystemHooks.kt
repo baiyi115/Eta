@@ -6,6 +6,7 @@ import android.os.Build
 import androidx.annotation.RequiresApi
 import io.github.libxposed.api.XposedModule
 import io.github.mangi.eta.agent.virtualdisplay.CanvasRoutingPolicy
+import io.github.mangi.eta.agent.virtualdisplay.VirtualDisplayFlags
 import io.github.mangi.eta.config.Prefs
 import io.github.mangi.eta.core.HookInstallation
 import io.github.mangi.eta.core.HookRegistrar
@@ -123,7 +124,7 @@ internal object VirtualDisplaySystemHooks {
                 config.densityDpi,
             ).apply {
                 config.surface?.let(::setSurface)
-                setFlags(config.flags or CanvasRoutingPolicy.TRUSTED_INTERACTIVE_FLAGS)
+                setFlags(config.flags or VirtualDisplayFlags.interactive())
                 if (config.requestedRefreshRate > 0f) {
                     setRequestedRefreshRate(config.requestedRefreshRate)
                 }

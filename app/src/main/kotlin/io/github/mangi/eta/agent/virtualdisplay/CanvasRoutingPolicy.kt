@@ -16,33 +16,8 @@ internal object CanvasRoutingPolicy {
 
     const val VIRTUAL_DISPLAY_NAME = "EtaAgentVirtualDisplay"
 
-    // DisplayManager 公开与内部受信任虚拟屏标志位（AOSP DisplayManager.java）
-    const val FLAG_PUBLIC = 1 shl 0
-    const val FLAG_PRESENTATION = 1 shl 1
-    const val FLAG_OWN_CONTENT_ONLY = 1 shl 3
-    const val FLAG_SUPPORTS_TOUCH = 1 shl 6
-    const val FLAG_ROTATES_WITH_CONTENT = 1 shl 7
-    const val FLAG_DESTROY_CONTENT_ON_REMOVAL = 1 shl 8
-    const val FLAG_TRUSTED = 1 shl 10
-    const val FLAG_OWN_DISPLAY_GROUP = 1 shl 11
-    const val FLAG_ALWAYS_UNLOCKED = 1 shl 12
-    const val FLAG_TOUCH_FEEDBACK_DISABLED = 1 shl 13
-    const val FLAG_OWN_FOCUS = 1 shl 14
-    const val FLAG_STEAL_TOP_FOCUS_DISABLED = 1 shl 15
-
-    /** 受信任后台交互画布所需的完整标志组合：支持触摸、独立焦点、不抢夺主屏顶部焦点、销毁时回收窗口。 */
-    const val TRUSTED_INTERACTIVE_FLAGS: Int =
-        FLAG_PUBLIC or
-            FLAG_OWN_CONTENT_ONLY or
-            FLAG_SUPPORTS_TOUCH or
-            FLAG_ROTATES_WITH_CONTENT or
-            FLAG_DESTROY_CONTENT_ON_REMOVAL or
-            FLAG_TRUSTED or
-            FLAG_OWN_DISPLAY_GROUP or
-            FLAG_ALWAYS_UNLOCKED or
-            FLAG_TOUCH_FEEDBACK_DISABLED or
-            FLAG_OWN_FOCUS or
-            FLAG_STEAL_TOP_FOCUS_DISABLED
+    // 建屏标志位不在这里维护：ROM 会改写这些比特（例如 DEVICE_DISPLAY_GROUP 与
+    // STEAL_TOP_FOCUS_DISABLED 都曾占用 1 shl 15），唯一来源是 VirtualDisplayFlags.interactive()。
 
     private val MAIN_DISPLAY_ONLY_PACKAGES = setOf(
         "android",

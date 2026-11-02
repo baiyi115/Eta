@@ -1,5 +1,6 @@
 package io.github.mangi.eta.agent.virtualdisplay
 
+import android.content.Context
 import android.os.Binder
 import android.os.Bundle
 import android.os.IBinder
@@ -60,13 +61,18 @@ internal object VirtualDisplaySurfaceRegistry {
  *
  * 支持两种模式：
  * 1. action="hold_display"：通过 ContentProvider 取得 Eta 进程的 Surface，以系统身份创建
- *    TRUSTED VirtualDisplay，输出 ETA_VD_READY:<displayId> 后保持存活；stdin 断开即自动释放。
+ *    TRUSTED VirtualDisplay，输出 ETA_VD_READY:<displayId> 后保持存活；之后在同一 stdin 上接受
+ *    逐行 JSON 命令（tap / longpress / swipe / key / task_conflict），结果以 ETA_VD_RESULT 返回。
+ *    这是本地 Phone use 链路验证过的定向输入路径：事件携带 displayId，不会落到用户当前窗口。
+ *    stdin 断开或收到 "release" 即释放虚拟屏。
  * 2. action="move_to_main"：查找指定 displayId 或 packageName 的 RootTask 并调用
  *    IActivityTaskManager.moveRootTaskToDisplay 迁移至物理主屏（DEFAULT_DISPLAY）。
  */
 internal object VirtualDisplayCommandMain {
     const val READY_PREFIX = "ETA_VD_READY:"
     const val RESULT_PREFIX = "ETA_VD_RESULT:"
+
+    private const val IME_POLICY_HIDE = 2
 
     @JvmStatic
     @Suppress("DEPRECATION")
@@ -125,7 +131,8 @@ internal object VirtualDisplayCommandMain {
             }
         }
 
-        val virtualDisplay = createTrustedVirtualDisplay(surface, width, height, densityDpi)
+        val context = systemContext()
+        val virtualDisplay = createTrustedVirtualDisplay(context, surface, width, height, densityDpi)
         if (virtualDisplay == null) {
             surface.release()
             println(RESULT_PREFIX + JSONObject().put("ok", false).put("code", "CREATE_DISPLAY_FAILED"))
@@ -140,13 +147,20 @@ internal object VirtualDisplayCommandMain {
             exitProcess(1)
         }
 
+        // 两个准备动作都只尽力而为：失败时虚拟屏仍然可用，只是输入回退到无障碍手势。
+        runCatching { configureImePolicy(displayId) }
+        runCatching { VirtualDisplayInput.configure(context) }
+
         println("$READY_PREFIX$displayId")
         System.out.flush()
 
         try {
             while (true) {
                 val line = reader.readLine() ?: break
-                if (line.trim() == "release") break
+                val text = line.trim()
+                if (text.isEmpty()) continue
+                if (text == "release" || text == "stop") break
+                handleCommand(text, displayId)
             }
         } catch (_: Throwable) {
             // 宿主关闭管道或取消任务
@@ -155,6 +169,114 @@ internal object VirtualDisplayCommandMain {
             runCatching { surface.release() }
         }
         exitProcess(0)
+    }
+
+    private fun handleCommand(line: String, displayId: Int) {
+        val request = runCatching { JSONObject(line) }.getOrNull() ?: return
+        val id = request.optLong("id", -1L)
+        val result = JSONObject().put("id", id)
+        runCatching {
+            when (request.optString("action")) {
+                "tap" -> result.put(
+                    "ok",
+                    VirtualDisplayInput.tap(displayId, request.optDouble("x", 0.0).toFloat(), request.optDouble("y", 0.0).toFloat()),
+                )
+                "longpress" -> result.put(
+                    "ok",
+                    VirtualDisplayInput.longPress(
+                        displayId,
+                        request.optDouble("x", 0.0).toFloat(),
+                        request.optDouble("y", 0.0).toFloat(),
+                        request.optLong("duration_ms", 800L),
+                    ),
+                )
+                "swipe" -> result.put(
+                    "ok",
+                    VirtualDisplayInput.swipe(
+                        displayId,
+                        request.optDouble("x1", 0.0).toFloat(),
+                        request.optDouble("y1", 0.0).toFloat(),
+                        request.optDouble("x2", 0.0).toFloat(),
+                        request.optDouble("y2", 0.0).toFloat(),
+                        request.optLong("duration_ms", 300L),
+                    ),
+                )
+                "key" -> result.put("ok", VirtualDisplayInput.key(displayId, request.optInt("key_code")))
+                "task_conflict" -> result
+                    .put("ok", true)
+                    .put("display", visibleTaskDisplay(request.optString("package_name"), displayId))
+                else -> result.put("ok", false).put("code", "UNKNOWN_ACTION")
+            }
+        }.onFailure {
+            result.put("ok", false).put("code", "INPUT_FAILED").put("type", it.javaClass.simpleName)
+        }
+        println(RESULT_PREFIX + result)
+        System.out.flush()
+    }
+
+    /**
+     * 目标包是否已在其它 display 上有可见任务，返回该 display；没有冲突时 -1。
+     *
+     * 多数应用声明 singleTask，要求系统在后台屏启动会被满足为“把用户正在看的 Task 搬走”。
+     * 这里只提供事实，是否中止由调用方决定（当前策略是回退主屏启动，不报错）。
+     */
+    private fun visibleTaskDisplay(packageName: String, ownDisplayId: Int): Int {
+        if (packageName.isBlank()) return -1
+        return runCatching {
+            val service = Class.forName("android.app.ActivityTaskManager")
+                .getMethod("getService")
+                .invoke(null) ?: return@runCatching -1
+            val getTasks = service.javaClass.methods.firstOrNull {
+                it.name == "getTasks" &&
+                    it.parameterCount >= 3 &&
+                    it.parameterTypes[0] == Int::class.javaPrimitiveType &&
+                    it.parameterTypes[1] == Boolean::class.javaPrimitiveType &&
+                    it.parameterTypes[2] == Boolean::class.javaPrimitiveType
+            } ?: return@runCatching -1
+            val raw = when (getTasks.parameterCount) {
+                3 -> getTasks.invoke(service, 200, false, false)
+                else -> getTasks.invoke(service, 200, false, false, Display.INVALID_DISPLAY)
+            } as? List<*> ?: return@runCatching -1
+            for (item in raw) {
+                val info = item as? android.app.TaskInfo ?: continue
+                val display = runCatching {
+                    android.app.TaskInfo::class.java.getField("displayId").getInt(info)
+                }.getOrDefault(Display.INVALID_DISPLAY)
+                val visible = runCatching {
+                    android.app.TaskInfo::class.java.getField("isVisible").getBoolean(info)
+                }.getOrDefault(false)
+                if (!visible || display == ownDisplayId) continue
+                val packages = listOfNotNull(
+                    info.topActivity?.packageName,
+                    info.baseActivity?.packageName,
+                    info.baseIntent?.component?.packageName,
+                )
+                if (packages.contains(packageName)) return@runCatching display
+            }
+            -1
+        }.getOrDefault(-1)
+    }
+
+    private fun configureImePolicy(displayId: Int) {
+        val binder = Class.forName("android.os.ServiceManager")
+            .getMethod("getService", String::class.java)
+            .invoke(null, "window")
+        val windowManager = Class.forName("android.view.IWindowManager\$Stub")
+            .getMethod("asInterface", IBinder::class.java)
+            .invoke(null, binder)
+        val setPolicy = windowManager.javaClass.getMethod(
+            "setDisplayImePolicy",
+            Int::class.javaPrimitiveType,
+            Int::class.javaPrimitiveType,
+        )
+        setPolicy.invoke(windowManager, displayId, IME_POLICY_HIDE)
+    }
+
+    private fun systemContext(): Context {
+        if (Looper.getMainLooper() == null) Looper.prepareMainLooper()
+        val activityThread = Class.forName("android.app.ActivityThread")
+        val thread = activityThread.getMethod("systemMain").invoke(null)
+        return activityThread.getMethod("getSystemContext").invoke(thread) as Context
     }
 
     private fun acquireSurfaceFromApp(userId: Int, surfaceToken: String): Surface? {
@@ -218,14 +340,14 @@ internal object VirtualDisplayCommandMain {
 
     @android.annotation.SuppressLint("WrongConstant")
     private fun createTrustedVirtualDisplay(
+        context: Context,
         surface: Surface,
         width: Int,
         height: Int,
         densityDpi: Int,
     ): android.hardware.display.VirtualDisplay? = runCatching {
-        val activityThreadClass = Class.forName("android.app.ActivityThread")
-        val thread = activityThreadClass.getMethod("systemMain").invoke(null)
-        val systemContext = activityThreadClass.getMethod("getSystemContext").invoke(thread) as android.content.Context
+        // 以运行中 ROM 的真实取值拼装；未定义的焦点标志位保持缺席，而不是套用 AOSP 字面量。
+        val flags = VirtualDisplayFlags.interactive()
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             val config = android.hardware.display.VirtualDisplayConfig.Builder(
                 CanvasRoutingPolicy.VIRTUAL_DISPLAY_NAME,
@@ -234,35 +356,35 @@ internal object VirtualDisplayCommandMain {
                 densityDpi,
             )
                 .setSurface(surface)
-                .setFlags(CanvasRoutingPolicy.TRUSTED_INTERACTIVE_FLAGS)
+                .setFlags(flags)
                 .build()
             val dmgClass = Class.forName("android.hardware.display.DisplayManagerGlobal")
             val dmg = dmgClass.getMethod("getInstance").invoke(null)
             val createMethod = dmgClass.methods.firstOrNull {
                 it.name == "createVirtualDisplay" &&
                     it.parameterCount >= 3 &&
-                    it.parameterTypes[0] == android.content.Context::class.java &&
+                    it.parameterTypes[0] == Context::class.java &&
                     it.parameterTypes[2] == android.hardware.display.VirtualDisplayConfig::class.java
             }
             if (createMethod != null) {
                 val args = arrayOfNulls<Any?>(createMethod.parameterCount)
-                args[0] = systemContext
+                args[0] = context
                 args[1] = null // MediaProjection
                 args[2] = config
                 createMethod.invoke(dmg, *args) as? android.hardware.display.VirtualDisplay
             } else {
-                val dm = systemContext.getSystemService(android.hardware.display.DisplayManager::class.java)
+                val dm = context.getSystemService(android.hardware.display.DisplayManager::class.java)
                 dm?.createVirtualDisplay(config)
             }
         } else {
-            val dm = systemContext.getSystemService(android.hardware.display.DisplayManager::class.java)
+            val dm = context.getSystemService(android.hardware.display.DisplayManager::class.java)
             dm?.createVirtualDisplay(
                 CanvasRoutingPolicy.VIRTUAL_DISPLAY_NAME,
                 width,
                 height,
                 densityDpi,
                 surface,
-                CanvasRoutingPolicy.TRUSTED_INTERACTIVE_FLAGS,
+                flags,
             )
         }
     }.getOrNull()

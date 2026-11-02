@@ -388,10 +388,6 @@ internal object AgentModelClient {
          */
         val sensitive: Boolean = false,
         val command: String? = null,
-        /** Trusted executor requests a controlled end after all tool results in this batch are recorded. */
-        val stopMessage: String? = null,
-        /** Release tool resources, block further tools, then synthesize the answer from observed evidence. */
-        val finalizeResponse: Boolean = false,
         /** Explicit user-visible attachments, separate from transient model observations. */
         val replyImages: List<ModelImage> = emptyList(),
     )

@@ -61,6 +61,7 @@ internal fun toolDisplayNameResource(name: String): Int? {
 
 @StringRes
 private fun toolDisplayNameResourceWithoutMcp(name: String): Int? = when (name) {
+    // 已移除的历史工具：只为归档会话保留名称。
     "phone_use" -> R.string.tool_phone_use
     "background_phone_use" -> R.string.tool_background_phone_use
     "observe_screen" -> R.string.tool_observe_screen

@@ -60,6 +60,7 @@ import androidx.compose.material.icons.rounded.Wifi
 import androidx.compose.ui.graphics.vector.ImageVector
 
 internal fun iconForTool(toolId: String): ImageVector = when (toolId) {
+    // 已移除的历史工具：只为归档会话保留图标。
     "phone_use", "background_phone_use" -> Icons.Rounded.Smartphone
     "observe", "observe_screen" -> Icons.Rounded.DocumentScanner
     "click", "tap", "tap_element" -> Icons.Rounded.AdsClick

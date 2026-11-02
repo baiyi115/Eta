@@ -1370,4 +1370,10 @@
   <string name="chat_queue_remove">移除排隊訊息</string>
   <string name="chat_queue_images_only">[%1$d 張圖片]</string>
   <string name="chat_queue_files_only">[%1$d 個檔案]</string>
+  <string name="chat_reply_screenshot">截圖 %1$d</string>
+  <string name="chat_reply_image_loading">正在載入截圖…</string>
+  <string name="chat_reply_image_zoom">雙指或點兩下縮放圖片</string>
+  <string name="chat_reply_image_failed">無法載入截圖</string>
+  <string name="tool_phone_use">操作手機</string>
+  <string name="tool_background_phone_use">背景操作手機</string>
 </resources>

@@ -70,6 +70,3 @@
 -keep class io.github.mangi.eta.agent.virtualdisplay.VirtualDisplayCommandMain {
     public static void main(java.lang.String[]);
 }
-
-# Root app_process entry point for the isolated Phone use display.
--keep class io.github.mangi.eta.agent.phoneuse.helper.DisplayHelper { public static void main(java.lang.String[]); }

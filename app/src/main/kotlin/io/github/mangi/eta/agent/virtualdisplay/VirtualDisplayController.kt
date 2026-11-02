@@ -49,6 +49,9 @@ import org.lsposed.hiddenapibypass.HiddenApiBypass
  */
 internal object VirtualDisplayController {
 
+    /** 完整画面保留节流；观察请求会绕过节流先 flush 暂存帧。 */
+    private const val FRAME_RETAIN_INTERVAL_MS = 200L
+
     private val lock = Any()
     private val mutableSnapshots = MutableStateFlow(VirtualDisplaySnapshot.Inactive)
     val snapshots: StateFlow<VirtualDisplaySnapshot> = mutableSnapshots.asStateFlow()
@@ -65,6 +68,18 @@ internal object VirtualDisplayController {
     private var inProcessVirtualDisplay: VirtualDisplay? = null
     private var rootBridgeProcess: Process? = null
     private var processSupervisor: ShellProcessSupervisor? = null
+
+    /** 最近一帧完整画面的保留节流，见 [retainPendingFrameLocked]；只暂存一张 Image。 */
+    private var pendingFrame: Image? = null
+    private var lastRetainedAtElapsedMs: Long = 0L
+
+    /** Root 桥请求/响应通道：同一时刻只允许一个在途请求，虚拟屏输入本身也是串行的。 */
+    private val bridgeLock = java.lang.Object()
+    private val bridgeRequestMutex = Any()
+    private var bridgeRequestSeq: Long = 0L
+    private var pendingBridgeRequestId: Long = -1L
+    private var pendingBridgeResponse: JSONObject? = null
+    private var bridgeDisplayId: Int = Display.INVALID_DISPLAY
 
     private var activeDisplayId: Int = Display.DEFAULT_DISPLAY
     private var displayWidth: Int = 1080
@@ -95,6 +110,118 @@ internal object VirtualDisplayController {
     }
 
     /**
+     * 通过 Root 桥把一次触摸定向注入虚拟屏；桥不存在或 display 不匹配时返回 false，由调用方回退。
+     */
+    fun injectTouch(displayId: Int, x: Int, y: Int, durationMs: Int = 60): Boolean {
+        if (!isBridgeDisplay(displayId)) return false
+        val duration = durationMs.toLong().coerceIn(40L, 5_000L)
+        val action = if (duration > 120L) "longpress" else "tap"
+        return bridgeSend(
+            JSONObject()
+                .put("action", action)
+                .put("x", x)
+                .put("y", y)
+                .put("duration_ms", duration),
+            timeoutMs = duration + 1_500L,
+        )?.optBoolean("ok") == true
+    }
+
+    fun injectSwipe(displayId: Int, x1: Int, y1: Int, x2: Int, y2: Int, durationMs: Int): Boolean {
+        if (!isBridgeDisplay(displayId)) return false
+        val duration = durationMs.toLong().coerceIn(60L, 4_000L)
+        return bridgeSend(
+            JSONObject()
+                .put("action", "swipe")
+                .put("x1", x1)
+                .put("y1", y1)
+                .put("x2", x2)
+                .put("y2", y2)
+                .put("duration_ms", duration),
+            timeoutMs = duration + 2_000L,
+        )?.optBoolean("ok") == true
+    }
+
+    fun injectKey(displayId: Int, keyCode: Int): Boolean {
+        if (!isBridgeDisplay(displayId)) return false
+        return bridgeSend(
+            JSONObject().put("action", "key").put("key_code", keyCode),
+            timeoutMs = 2_000L,
+        )?.optBoolean("ok") == true
+    }
+
+    /** 目标包有可见任务的 display；无桥或查询失败时返回 null（不阻断启动）。 */
+    private fun taskConflictDisplay(displayId: Int, packageName: String): Int? {
+        if (packageName.isBlank() || !isBridgeDisplay(displayId)) return null
+        val response = bridgeSend(
+            JSONObject().put("action", "task_conflict").put("package_name", packageName),
+            timeoutMs = 2_500L,
+        ) ?: return null
+        return response.optInt("display", -1).takeIf { it >= 0 }
+    }
+
+    private fun isBridgeDisplay(displayId: Int): Boolean = synchronized(lock) {
+        rootBridgeProcess?.isAlive == true &&
+            CanvasRoutingPolicy.isVirtualDisplay(displayId) &&
+            displayId == bridgeDisplayId
+    }
+
+    /**
+     * 向桥进程发送一条命令并等待应答。
+     *
+     * 输入本身是串行的，所以同一时刻只跟踪一个在途 id；超时返回 null，不会阻塞到下一个手势。
+     */
+    private fun bridgeSend(payload: JSONObject, timeoutMs: Long): JSONObject? = synchronized(bridgeRequestMutex) {
+        val process = rootBridgeProcess ?: return null
+        if (!process.isAlive) return null
+        val id = synchronized(bridgeLock) {
+            val next = ++bridgeRequestSeq
+            pendingBridgeRequestId = next
+            pendingBridgeResponse = null
+            next
+        }
+        val line = JSONObject(payload.toString()).put("id", id).toString() + "\n"
+        val written = runCatching {
+            synchronized(bridgeLock) {
+                process.outputStream.write(line.toByteArray(Charsets.UTF_8))
+                process.outputStream.flush()
+            }
+            true
+        }.getOrDefault(false)
+        if (!written) return null
+
+        val deadline = SystemClock.elapsedRealtime() + timeoutMs
+        synchronized(bridgeLock) {
+            while (pendingBridgeResponse == null) {
+                val remaining = deadline - SystemClock.elapsedRealtime()
+                if (remaining <= 0L) {
+                    pendingBridgeRequestId = -1L
+                    return null
+                }
+                try {
+                    bridgeLock.wait(remaining)
+                } catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    pendingBridgeRequestId = -1L
+                    return null
+                }
+            }
+            val response = pendingBridgeResponse
+            pendingBridgeRequestId = -1L
+            pendingBridgeResponse = null
+            return response
+        }
+    }
+
+    /**
+     * 当前画布是否仍可复用；Root 桥进程退出后其 display 已经失效，必须重新建立。
+     * 调用方必须持有 [lock]。
+     */
+    private fun hasUsableDisplayLocked(): Boolean =
+        CanvasRoutingPolicy.isVirtualDisplay(activeDisplayId) &&
+            imageReader != null &&
+            (activeDisplayId != bridgeDisplayId || rootBridgeProcess?.isAlive == true)
+
+    /**
      * 确保受信任虚拟屏已就绪并返回其 displayId；不可用时返回 null，由调用方平滑回退至物理主屏。
      */
     fun ensureVirtualDisplay(
@@ -102,14 +229,14 @@ internal object VirtualDisplayController {
         rootAvailable: () -> Boolean = { RootAccess.isGranted },
     ): Int? {
         synchronized(lock) {
-            if (CanvasRoutingPolicy.isVirtualDisplay(activeDisplayId) && imageReader != null) {
+            if (hasUsableDisplayLocked()) {
                 return activeDisplayId
             }
         }
         val appContext = context.applicationContext
         val (width, height, densityDpi) = resolvePhysicalDisplayMetrics(appContext)
         synchronized(lock) {
-            if (CanvasRoutingPolicy.isVirtualDisplay(activeDisplayId) && imageReader != null) {
+            if (hasUsableDisplayLocked()) {
                 return activeDisplayId
             }
             releaseLocked(appContext, rootAvailable)
@@ -126,6 +253,31 @@ internal object VirtualDisplayController {
             displayHeight = height
             displayDensityDpi = densityDpi
 
+            // 有 Root 时优先走桥进程：建屏、定向输入与 IME 隔离都在这条本地已验证的链路上完成；
+            // 桥失败或无 Root 时回退进程内创建（依赖 HiddenApiBypass / LSPosed 权限升级）。
+            if (rootAvailable()) {
+                val rootId = tryCreateRootBridgedVirtualDisplay(
+                    appContext = appContext,
+                    surface = reader.surface,
+                    width = width,
+                    height = height,
+                    densityDpi = densityDpi,
+                    rootAvailable = rootAvailable,
+                )
+                if (rootId != null && CanvasRoutingPolicy.isVirtualDisplay(rootId)) {
+                    activeDisplayId = rootId
+                    bridgeDisplayId = rootId
+                    mutableSnapshots.value = VirtualDisplaySnapshot(
+                        active = true,
+                        displayId = rootId,
+                        width = width,
+                        height = height,
+                    )
+                    AndroidAgentLogger.info("Virtual display created via root bridge: displayId=$rootId size=${width}x$height")
+                    return rootId
+                }
+            }
+
             val createdInProcess = tryCreateInProcessVirtualDisplay(
                 appContext = appContext,
                 surface = reader.surface,
@@ -138,6 +290,7 @@ internal object VirtualDisplayController {
                 if (CanvasRoutingPolicy.isVirtualDisplay(id)) {
                     inProcessVirtualDisplay = createdInProcess
                     activeDisplayId = id
+                    bridgeDisplayId = Display.INVALID_DISPLAY
                     mutableSnapshots.value = VirtualDisplaySnapshot(
                         active = true,
                         displayId = id,
@@ -148,28 +301,6 @@ internal object VirtualDisplayController {
                     return id
                 }
                 runCatching { createdInProcess.release() }
-            }
-
-            if (rootAvailable()) {
-                val rootId = tryCreateRootBridgedVirtualDisplay(
-                    appContext = appContext,
-                    surface = reader.surface,
-                    width = width,
-                    height = height,
-                    densityDpi = densityDpi,
-                    rootAvailable = rootAvailable,
-                )
-                if (rootId != null && CanvasRoutingPolicy.isVirtualDisplay(rootId)) {
-                    activeDisplayId = rootId
-                    mutableSnapshots.value = VirtualDisplaySnapshot(
-                        active = true,
-                        displayId = rootId,
-                        width = width,
-                        height = height,
-                    )
-                    AndroidAgentLogger.info("Virtual display created via root bridge: displayId=$rootId size=${width}x$height")
-                    return rootId
-                }
             }
 
             releaseLocked(appContext, rootAvailable)
@@ -189,45 +320,57 @@ internal object VirtualDisplayController {
     ): Int? {
         val displayId = ensureVirtualDisplay(context, rootAvailable) ?: return null
         val appContext = context.applicationContext
+        // 目标包已在其它 display 上有可见任务时，单实例启动会把用户正在看的 Task 搬走；
+        // 释放本次画布并让调用方回退主屏，避免留下一个空的后台屏。
+        if (taskConflictDisplay(displayId, packageName) != null) {
+            AndroidAgentLogger.info("Virtual display launch skipped: $packageName already has a visible task elsewhere")
+            release(appContext, rootAvailable)
+            return null
+        }
         mutePackageAudioFocusIfPossible(appContext, packageName, rootAvailable)
 
-        val startedInProcess = runCatching {
-            val intent = Intent(launchIntent).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
-            }
-            val options = ActivityOptions.makeBasic().setLaunchDisplayId(displayId)
-            appContext.startActivity(intent, options.toBundle())
-            true
-        }.getOrElse { throwable ->
-            AndroidAgentLogger.debug {
-                "Virtual display startActivity in-process fallback: type=${throwable.safeLogType()}"
-            }
+        // 桥建屏时进程内 start 可能被跨屏栈迁移静默吞掉，直接使用本地验证过的 am start --display；
+        // 进程内建屏则只走进程内 start，避免同一个 Intent 启动两次。
+        val startedInProcess = if (isBridgeDisplay(displayId)) {
             false
+        } else {
+            runCatching {
+                val intent = Intent(launchIntent).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+                }
+                val options = ActivityOptions.makeBasic().setLaunchDisplayId(displayId)
+                appContext.startActivity(intent, options.toBundle())
+                true
+            }.getOrElse { throwable ->
+                AndroidAgentLogger.debug {
+                    "Virtual display startActivity in-process fallback: type=${throwable.safeLogType()}"
+                }
+                false
+            }
         }
 
-        if (!startedInProcess || rootAvailable()) {
-            // Root 下补发一次指定 displayId 的 am start，确保后台启动限制或跨屏栈迁移生效
-            if (rootAvailable()) {
-                val userId = DeviceToolContract.appUserId(appContext)
-                val component = launchIntent.component?.flattenToShortString()
-                val cmd = if (!component.isNullOrBlank()) {
-                    "am start --user $userId --display $displayId -n ${DeviceToolContract.quote(component)}"
-                } else {
-                    "monkey -p ${DeviceToolContract.quote(packageName)} -c android.intent.category.LAUNCHER 1"
-                }
-                if (!startedInProcess) {
-                    val exec = BoundedRootCommandExecutor(AndroidAgentLogger, rootAvailable = rootAvailable)
-                    try {
-                        val res = exec.execute(cmd, timeoutMillis = 6_000L)
-                        if (res.exitCode != 0 && !startedInProcess) return null
-                    } finally {
-                        exec.close()
-                    }
-                }
-            } else if (!startedInProcess) {
-                return null
+        var startedByRoot = false
+        if (!startedInProcess && rootAvailable()) {
+            val userId = DeviceToolContract.appUserId(appContext)
+            val component = launchIntent.component?.flattenToShortString()
+            val target = if (!component.isNullOrBlank()) {
+                "-n ${DeviceToolContract.quote(component)}"
+            } else {
+                "-p ${DeviceToolContract.quote(packageName)}"
+            }
+            val cmd = "am start -W --user $userId --display $displayId -a android.intent.action.MAIN " +
+                "-c android.intent.category.LAUNCHER $target"
+            val exec = BoundedRootCommandExecutor(AndroidAgentLogger, rootAvailable = rootAvailable)
+            startedByRoot = try {
+                exec.execute(cmd, timeoutMillis = 10_000L).exitCode == 0
+            } catch (_: Throwable) {
+                false
+            } finally {
+                exec.close()
             }
         }
+
+        if (!startedInProcess && !startedByRoot) return null
 
         synchronized(lock) {
             val current = mutableSnapshots.value
@@ -338,6 +481,8 @@ internal object VirtualDisplayController {
         val deadline = SystemClock.elapsedRealtime() + waitUpToMs.coerceAtLeast(0L)
         while (true) {
             synchronized(lock) {
+                // 观察可能落在 200ms 节流窗口内：先把暂存帧解码出来，返回的是动作后的画面。
+                if (pendingFrame != null) retainPendingFrameLocked(SystemClock.elapsedRealtime())
                 val bmp = latestFullBitmap
                 if (bmp != null && !bmp.isRecycled) {
                     return runCatching { bmp.copy(Bitmap.Config.ARGB_8888, false) }.getOrNull()
@@ -404,6 +549,7 @@ internal object VirtualDisplayController {
         emitTapEffect(x, y, longPress = longPress)
         thread(name = "eta-vd-user-tap", isDaemon = true) {
             val duration = if (longPress) 650L else 55L
+            if (injectTouch(snapshot.displayId, x, y, durationMs = duration.toInt())) return@thread
             val dispatched = AgentAccessibilityService.current()
                 ?.gestureTap(x.toFloat(), y.toFloat(), durationMs = duration, displayId = snapshot.displayId)
                 ?.ok == true
@@ -440,6 +586,7 @@ internal object VirtualDisplayController {
         val safeDuration = durationMs.coerceIn(140, 1_000)
         emitSwipeEffect(x1, y1, x2, y2, safeDuration)
         thread(name = "eta-vd-user-swipe", isDaemon = true) {
+            if (injectSwipe(snapshot.displayId, x1, y1, x2, y2, safeDuration)) return@thread
             val dispatched = AgentAccessibilityService.current()
                 ?.gestureSwipe(
                     x1.toFloat(),
@@ -478,7 +625,15 @@ internal object VirtualDisplayController {
     ) {
         highFrequencyPreview = false
         activeDisplayId = Display.DEFAULT_DISPLAY
+        bridgeDisplayId = Display.INVALID_DISPLAY
         mutableSnapshots.value = VirtualDisplaySnapshot.Inactive
+
+        // 桥即将关闭：唤醒等待中的输入请求，避免它们等满超时。
+        synchronized(bridgeLock) {
+            pendingBridgeRequestId = -1L
+            pendingBridgeResponse = JSONObject().put("ok", false).put("code", "BRIDGE_CLOSED")
+            bridgeLock.notifyAll()
+        }
 
         if (context != null && mutedPackages.isNotEmpty()) {
             restoreMutedPackages(context.applicationContext, rootAvailable)
@@ -498,9 +653,12 @@ internal object VirtualDisplayController {
         if (bridge != null) {
             thread(name = "eta-vd-bridge-cleanup", isDaemon = true) {
                 runCatching {
-                    bridge.outputStream.write("release\n".toByteArray(Charsets.UTF_8))
-                    bridge.outputStream.flush()
-                    bridge.outputStream.close()
+                    // 与 bridgeSend 共用同一把写锁，避免 release 与在途命令的字节交错。
+                    synchronized(bridgeLock) {
+                        bridge.outputStream.write("release\n".toByteArray(Charsets.UTF_8))
+                        bridge.outputStream.flush()
+                        bridge.outputStream.close()
+                    }
                 }
                 if (supervisor != null) {
                     supervisor.beginClosing()
@@ -524,6 +682,9 @@ internal object VirtualDisplayController {
         frameThread = null
         frameHandler = null
 
+        pendingFrame?.let { frame -> runCatching { frame.close() } }
+        pendingFrame = null
+        lastRetainedAtElapsedMs = 0L
         latestFullBitmap?.let { bmp ->
             if (!bmp.isRecycled) bmp.recycle()
         }
@@ -538,40 +699,78 @@ internal object VirtualDisplayController {
             null
         } ?: return
 
+        var replaced: Image? = null
+        var closeDirectly = false
         try {
-            val now = SystemClock.elapsedRealtime()
-            val minIntervalMs = if (highFrequencyPreview) 30L else 160L
-            val shouldUpdateUi = now - lastUiFrameAtElapsedMs >= minIntervalMs || latestFullBitmap == null
-
-            val bitmap = decodeImageToBitmap(image) ?: return
-            var oldBitmap: Bitmap? = null
-            synchronized(lock) {
-                if (!CanvasRoutingPolicy.isVirtualDisplay(activeDisplayId)) {
-                    bitmap.recycle()
-                    return
-                }
-                oldBitmap = latestFullBitmap
-                latestFullBitmap = bitmap
-                if (shouldUpdateUi) {
-                    lastUiFrameAtElapsedMs = now
-                    val previewBitmap = createUiPreviewBitmap(bitmap)
-                    val current = mutableSnapshots.value
-                    if (current.active) {
-                        mutableSnapshots.value = current.copy(
-                            frame = previewBitmap.asImageBitmap(),
-                            frameSequence = frameSequenceGenerator.incrementAndGet(),
-                        )
+            runCatching {
+                synchronized(lock) {
+                    if (!CanvasRoutingPolicy.isVirtualDisplay(activeDisplayId)) {
+                        closeDirectly = true
+                        return@synchronized
+                    }
+                    // 旧帧留给锁外关闭；最新帧只暂存一张，完整 Bitmap 按节流保留，避免每帧复制整屏像素。
+                    replaced = pendingFrame
+                    pendingFrame = image
+                    val now = SystemClock.elapsedRealtime()
+                    val retainIntervalMs = if (highFrequencyPreview) 30L else FRAME_RETAIN_INTERVAL_MS
+                    if (latestFullBitmap == null || now - lastRetainedAtElapsedMs >= retainIntervalMs) {
+                        retainPendingFrameLocked(now)
                     }
                 }
+            }.onFailure { throwable ->
+                // 帧回调线程没有调用方接管异常：单帧失败只丢这一帧，不能让 HandlerThread 终止进程。
+                AndroidAgentLogger.debug {
+                    "Virtual display frame dropped: type=${throwable.safeLogType()}"
+                }
             }
-            oldBitmap?.let { old ->
-                if (!old.isRecycled) old.recycle()
-            }
-        } catch (_: Throwable) {
-            // 单帧解码异常不影响后续帧流
         } finally {
-            runCatching { image.close() }
+            runCatching { replaced?.close() }
+            if (closeDirectly) runCatching { image.close() }
         }
+    }
+
+    /**
+     * 解码暂存帧并更新快照；调用方必须持有 [lock]。
+     *
+     * 后台屏的完整画面最多每 [FRAME_RETAIN_INTERVAL_MS] 保留一次，静止时不再每帧复制十几 MB 像素；
+     * 展开画布或用户接管时跟随高频预览刷新，观察请求也会先调用本方法 flush，动作后的截图始终是最新画面。
+     */
+    private fun retainPendingFrameLocked(now: Long): Boolean {
+        val pending = pendingFrame ?: return false
+        pendingFrame = null
+        val bitmap = try {
+            decodeImageToBitmap(pending)
+        } catch (_: Throwable) {
+            null
+        } finally {
+            runCatching { pending.close() }
+        } ?: return false
+
+        val previous = latestFullBitmap
+        latestFullBitmap = bitmap
+        lastRetainedAtElapsedMs = now
+        previous?.let { if (!it.isRecycled) it.recycle() }
+
+        val minIntervalMs = if (highFrequencyPreview) 30L else 160L
+        if (now - lastUiFrameAtElapsedMs >= minIntervalMs) {
+            lastUiFrameAtElapsedMs = now
+            // 预览缩放失败只影响这一帧的 UI，不应波及已保留的完整画面或调用线程。
+            runCatching {
+                val previewBitmap = createUiPreviewBitmap(bitmap)
+                val current = mutableSnapshots.value
+                if (current.active) {
+                    mutableSnapshots.value = current.copy(
+                        frame = previewBitmap.asImageBitmap(),
+                        frameSequence = frameSequenceGenerator.incrementAndGet(),
+                    )
+                }
+            }.onFailure { throwable ->
+                AndroidAgentLogger.debug {
+                    "Virtual display preview dropped: type=${throwable.safeLogType()}"
+                }
+            }
+        }
+        return true
     }
 
     private fun decodeImageToBitmap(image: Image): Bitmap? {
@@ -622,6 +821,7 @@ internal object VirtualDisplayController {
             runCatching { HiddenApiBypass.addHiddenApiExemptions("Landroid/hardware/display/") }
         }
         val dm = appContext.getSystemService(DisplayManager::class.java) ?: return@runCatching null
+        val flags = VirtualDisplayFlags.interactive()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             val config = VirtualDisplayConfig.Builder(
                 CanvasRoutingPolicy.VIRTUAL_DISPLAY_NAME,
@@ -630,7 +830,7 @@ internal object VirtualDisplayController {
                 densityDpi,
             )
                 .setSurface(surface)
-                .setFlags(CanvasRoutingPolicy.TRUSTED_INTERACTIVE_FLAGS)
+                .setFlags(flags)
                 .build()
             dm.createVirtualDisplay(config)
         } else {
@@ -640,7 +840,7 @@ internal object VirtualDisplayController {
                 height,
                 densityDpi,
                 surface,
-                CanvasRoutingPolicy.TRUSTED_INTERACTIVE_FLAGS,
+                flags,
             )
         }
     }.getOrNull()
@@ -687,12 +887,33 @@ internal object VirtualDisplayController {
                                 .toIntOrNull()
                             readyLatch.countDown()
                         } else if (line.startsWith(VirtualDisplayCommandMain.RESULT_PREFIX)) {
-                            readyLatch.countDown()
+                            val payload = runCatching {
+                                JSONObject(line.removePrefix(VirtualDisplayCommandMain.RESULT_PREFIX))
+                            }.getOrNull()
+                            val responseId = payload?.optLong("id", -1L) ?: -1L
+                            if (payload != null && responseId >= 0L) {
+                                synchronized(bridgeLock) {
+                                    if (responseId == pendingBridgeRequestId) {
+                                        pendingBridgeResponse = payload
+                                        bridgeLock.notifyAll()
+                                    }
+                                }
+                            } else {
+                                // 没有请求 id 的 RESULT 是建屏阶段的失败应答。
+                                readyLatch.countDown()
+                            }
                         }
                     }
                 }
             }
             readyLatch.countDown()
+            // 桥进程退出（崩溃或 stdin 关闭）时唤醒在途请求，避免调用方等满超时。
+            synchronized(bridgeLock) {
+                if (pendingBridgeRequestId >= 0L) {
+                    pendingBridgeResponse = JSONObject().put("ok", false).put("code", "BRIDGE_CLOSED")
+                    bridgeLock.notifyAll()
+                }
+            }
         }
 
         val written = runCatching {
