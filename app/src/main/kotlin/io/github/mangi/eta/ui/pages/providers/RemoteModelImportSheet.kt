@@ -32,7 +32,6 @@ import androidx.compose.ui.unit.dp
 import io.github.mangi.eta.R
 import io.github.mangi.eta.data.model.Model
 import io.github.mangi.eta.data.repository.RemoteModelCatalog
-import io.github.mangi.eta.ui.components.EtaTextButton
 import io.github.mangi.eta.ui.model.ModelSearchQuery
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Checkbox
@@ -138,7 +137,7 @@ private fun RemoteModelImportContent(
             label = stringResource(R.string.ui_search_model_df5586),
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 20.dp)
+                .padding(horizontal = 16.dp)
                 .padding(top = 4.dp, bottom = 6.dp),
         )
         LazyColumn(
@@ -156,7 +155,7 @@ private fun RemoteModelImportContent(
                         textAlign = TextAlign.Center,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 20.dp, vertical = 48.dp),
+                            .padding(horizontal = 16.dp, vertical = 48.dp),
                     )
                 }
             }
@@ -171,7 +170,7 @@ private fun RemoteModelImportContent(
                 )
             }
         }
-        EtaTextButton(
+        TextButton(
             text = when {
                 selected.isNotEmpty() -> stringResource(R.string.remote_model_import_confirm, selected.size)
                 else -> stringResource(R.string.remote_model_import_pick_hint)
@@ -181,7 +180,7 @@ private fun RemoteModelImportContent(
             colors = ButtonDefaults.textButtonColorsPrimary(),
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 20.dp)
+                .padding(horizontal = 16.dp)
                 .padding(top = 8.dp, bottom = 12.dp),
         )
     }

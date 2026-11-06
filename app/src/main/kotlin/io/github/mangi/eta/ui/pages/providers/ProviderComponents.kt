@@ -2,36 +2,36 @@ package io.github.mangi.eta.ui.pages.providers
 
 import androidx.annotation.DrawableRes
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Dns
 import androidx.compose.material.icons.rounded.Language
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import io.github.mangi.eta.data.model.CustomProviderSetting
 import io.github.mangi.eta.data.model.ProviderSetting
-import io.github.mangi.eta.ui.components.EtaPreferenceColors
-import io.github.mangi.eta.ui.components.EtaPreferenceDefaults
-import io.github.mangi.eta.ui.components.EtaPreferenceGroup
-import io.github.mangi.eta.ui.components.EtaPreferenceGroupTitle
-import io.github.mangi.eta.ui.components.EtaPreferenceIcon
 import io.github.mangi.eta.ui.components.providerBrandLogoRes as sharedProviderBrandLogoRes
+import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.basic.Icon
+import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.squircle.squircleSurface
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
-/** 分组标题 + 卡片的标准组合，Provider 相关页面统一使用。 */
+/** 分组标题 + 卡片的标准组合，Provider 相关页面统一使用 Miuix 12.dp 外边距。 */
 @Composable
 internal fun ProviderSection(
     title: String?,
@@ -40,13 +40,13 @@ internal fun ProviderSection(
 ) {
     Column(modifier = modifier) {
         if (title != null) {
-            EtaPreferenceGroupTitle(title)
+            SmallTitle(title)
         }
-        EtaPreferenceGroup(
+        Card(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = EtaPreferenceDefaults.SidePadding)
-                .padding(bottom = EtaPreferenceDefaults.GroupSpacing),
+                .padding(horizontal = 12.dp)
+                .padding(bottom = 12.dp),
         ) {
             content()
         }
@@ -73,6 +73,7 @@ private fun ProviderBrandImage(
         contentDescription = null,
         contentScale = ContentScale.Fit,
         modifier = modifier
+            .padding(end = 8.dp)
             .size(24.dp)
             .clip(CircleShape),
     )
@@ -98,16 +99,21 @@ internal fun ProviderIcon(
         return
     }
 
-    when (provider) {
-        is CustomProviderSetting -> EtaPreferenceIcon(
-            icon = Icons.Rounded.Dns,
-            modifier = modifier,
-            tint = EtaPreferenceColors.Blue,
-        )
-        else -> EtaPreferenceIcon(
-            icon = Icons.Rounded.Language,
-            modifier = modifier,
-            tint = EtaPreferenceColors.Blue,
+    val icon = when (provider) {
+        is CustomProviderSetting -> Icons.Rounded.Dns
+        else -> Icons.Rounded.Language
+    }
+    Box(
+        modifier = modifier
+            .padding(end = 8.dp)
+            .size(24.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            modifier = Modifier.size(22.dp),
+            tint = MiuixTheme.colorScheme.onSurfaceVariantActions,
         )
     }
 }
@@ -122,22 +128,26 @@ internal fun TagChip(
 ) {
     val background: Color
     val foreground: Color
+    val weight: FontWeight
     when (tone) {
         TagChipTone.Normal -> {
             background = MiuixTheme.colorScheme.secondaryContainer
-            foreground = MiuixTheme.colorScheme.onSecondaryContainer
+            foreground = MiuixTheme.colorScheme.onSurfaceVariantSummary
+            weight = FontWeight.Normal
         }
         TagChipTone.Emphasized -> {
-            background = MiuixTheme.colorScheme.primaryContainer
-            foreground = MiuixTheme.colorScheme.onPrimaryContainer
+            background = MiuixTheme.colorScheme.tertiaryContainer
+            foreground = MiuixTheme.colorScheme.onTertiaryContainer
+            weight = FontWeight.Medium
         }
     }
     Text(
         text = text,
         style = MiuixTheme.textStyles.footnote2,
+        fontWeight = weight,
         color = foreground,
         modifier = Modifier
-            .background(background, RoundedCornerShape(6.dp))
+            .squircleSurface(color = background, cornerRadius = 6.dp)
             .padding(horizontal = 6.dp, vertical = 2.dp),
     )
 }

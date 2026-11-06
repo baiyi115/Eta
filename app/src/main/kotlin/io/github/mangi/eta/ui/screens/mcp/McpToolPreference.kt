@@ -7,13 +7,10 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -23,18 +20,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import io.github.mangi.eta.R
 import io.github.mangi.eta.data.model.McpToolDefinition
-import io.github.mangi.eta.ui.components.EtaPreference
-import io.github.mangi.eta.ui.components.EtaPreferenceDefaults
-import io.github.mangi.eta.ui.components.EtaSwitch
 import io.github.mangi.eta.ui.components.ExpandChevron
+import top.yukonga.miuix.kmp.basic.BasicComponent
+import top.yukonga.miuix.kmp.basic.Switch
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
@@ -53,28 +47,21 @@ internal fun McpToolPreference(
     val expandedState = stringResource(if (expanded) R.string.mcp_description_expanded else R.string.mcp_description_collapsed)
     val switchDescription = stringResource(R.string.mcp_tool_switch_accessibility, title)
     Column {
-        EtaPreference(
+        BasicComponent(
             title = title,
             modifier = Modifier.semantics { stateDescription = expandedState },
             onClick = { expanded = !expanded },
-            onClickLabel = expandAction,
-            role = Role.Button,
             endActions = {
-                ExpandChevron(expanded = expanded, contentDescription = null)
-                Spacer(Modifier.width(12.dp))
-                Box(
-                    modifier = Modifier.size(48.dp)
-                        .toggleable(value = checked, enabled = enabled, role = Role.Switch, onValueChange = onCheckedChange)
+                ExpandChevron(expanded = expanded, contentDescription = expandAction)
+                Spacer(Modifier.width(8.dp))
+                Switch(
+                    checked = checked,
+                    onCheckedChange = onCheckedChange,
+                    enabled = enabled,
+                    modifier = Modifier
+                        .align(Alignment.CenterVertically)
                         .semantics { contentDescription = switchDescription },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    EtaSwitch(
-                        checked = checked,
-                        onCheckedChange = null,
-                        enabled = enabled,
-                        modifier = Modifier.clearAndSetSemantics {},
-                    )
-                }
+                )
             },
         )
         AnimatedVisibility(
@@ -84,11 +71,7 @@ internal fun McpToolPreference(
         ) {
             SelectionContainer {
                 Column(
-                    modifier = Modifier.padding(
-                        start = EtaPreferenceDefaults.SidePadding,
-                        end = EtaPreferenceDefaults.SidePadding,
-                        bottom = 16.dp,
-                    ),
+                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     Text(

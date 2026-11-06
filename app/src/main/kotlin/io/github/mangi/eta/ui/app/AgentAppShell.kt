@@ -100,6 +100,7 @@ internal fun AgentAppShell(
     onRefreshKimiWeb: () -> Unit,
     onOpenBrowser: () -> Unit,
     onSelectConversation: (String) -> Unit,
+    onConversationTogglePin: (ConversationSummaryUi) -> Unit,
     onConversationRename: (ConversationSummaryUi) -> Unit,
     onConversationExport: (ConversationSummaryUi) -> Unit,
     onConversationDelete: (ConversationSummaryUi) -> Unit,
@@ -168,6 +169,7 @@ internal fun AgentAppShell(
                 onDismiss = onDismissConversationPane,
                 onSearchChange = onSearchConversations,
                 onConversationSelected = onSelectConversation,
+                onConversationTogglePin = onConversationTogglePin,
                 onConversationRename = onConversationRename,
                 onConversationExport = onConversationExport,
                 onConversationDelete = onConversationDelete,
@@ -445,7 +447,7 @@ private fun titleForRoute(route: AppRoute?): String = when (route) {
     is AppRoute.SharedFolders -> stringResource(R.string.route_shared_folders)
     is AppRoute.LinuxFiles -> stringResource(R.string.route_linux_files)
     is AppRoute.ModelProviders -> stringResource(R.string.route_model_providers)
-    is AppRoute.CommunityCatalog -> "从目录添加"
+    is AppRoute.CommunityCatalog -> "从 models.dev 添加"
     is AppRoute.CommunityCatalogProvider -> "选择模型"
     is AppRoute.McpServers -> stringResource(R.string.route_mcp_servers)
     is AppRoute.McpServerDetail -> stringResource(R.string.route_mcp_server_detail)
