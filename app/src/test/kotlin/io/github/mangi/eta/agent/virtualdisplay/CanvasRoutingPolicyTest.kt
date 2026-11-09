@@ -104,4 +104,22 @@ class CanvasRoutingPolicyTest {
         assertFalse(CanvasRoutingPolicy.isVirtualDisplay(Display.INVALID_DISPLAY))
         assertTrue(CanvasRoutingPolicy.isVirtualDisplay(2))
     }
+
+    @Test
+    fun backgroundDisplayRequiresAndroid14FocusIsolation() {
+        assertFalse(CanvasRoutingPolicy.supportsBackgroundDisplay(33))
+        assertTrue(CanvasRoutingPolicy.supportsBackgroundDisplay(34))
+        assertTrue(CanvasRoutingPolicy.supportsBackgroundDisplay(37))
+    }
+
+    @Test
+    fun displayMustExposeAllIsolationFlagsAfterCreation() {
+        val platformDisplayFlags = (1 shl 7) or (1 shl 11) or (1 shl 12)
+        assertTrue(CanvasRoutingPolicy.hasRequiredDisplayFlags(platformDisplayFlags))
+        for (requiredBit in listOf(7, 11, 12)) {
+            assertFalse(CanvasRoutingPolicy.hasRequiredDisplayFlags(platformDisplayFlags and (1 shl requiredBit).inv()))
+        }
+        // 建屏用的 VIRTUAL_DISPLAY_FLAG_TRUSTED（1 shl 10）不是 Display.getFlags() 的受信任位。
+        assertFalse(CanvasRoutingPolicy.hasRequiredDisplayFlags(1 shl 10))
+    }
 }

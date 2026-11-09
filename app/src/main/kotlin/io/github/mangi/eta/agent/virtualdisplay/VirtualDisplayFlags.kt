@@ -19,6 +19,10 @@ import org.lsposed.hiddenapibypass.HiddenApiBypass
  * 因此每个标志位都以运行中的 [DisplayManager] 反射值为准，只有在 ROM 完全没有定义该名字时才使用
  * AOSP 字面量；焦点相关标志位缺失时宁可不加，也不猜测。
  *
+ * 不启用 `ROTATES_WITH_CONTENT`（锁定与物理主屏一致的固定画幅，避免跨应用跳转旋转时重建 Surface）
+ * 与 `DESTROY_CONTENT_ON_REMOVAL`（避免跨应用栈迁移或释放时误杀应用进程）；这两点在 3.4.1 上游
+ * 的实现里同样被排除。
+ *
  * 这与本地 Phone use helper 的成熟做法一致，但不做任何回读校验：平台忽略某个标志位时只记录日志，
  * 会话继续。
  */
@@ -28,8 +32,6 @@ internal object VirtualDisplayFlags {
     private const val PRESENTATION = "VIRTUAL_DISPLAY_FLAG_PRESENTATION"
     private const val OWN_CONTENT_ONLY = "VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY"
     private const val SUPPORTS_TOUCH = "VIRTUAL_DISPLAY_FLAG_SUPPORTS_TOUCH"
-    private const val ROTATES_WITH_CONTENT = "VIRTUAL_DISPLAY_FLAG_ROTATES_WITH_CONTENT"
-    private const val DESTROY_CONTENT_ON_REMOVAL = "VIRTUAL_DISPLAY_FLAG_DESTROY_CONTENT_ON_REMOVAL"
     private const val TRUSTED = "VIRTUAL_DISPLAY_FLAG_TRUSTED"
     private const val OWN_DISPLAY_GROUP = "VIRTUAL_DISPLAY_FLAG_OWN_DISPLAY_GROUP"
     private const val ALWAYS_UNLOCKED = "VIRTUAL_DISPLAY_FLAG_ALWAYS_UNLOCKED"
@@ -44,8 +46,6 @@ internal object VirtualDisplayFlags {
         PRESENTATION to (1 shl 1),
         OWN_CONTENT_ONLY to (1 shl 3),
         SUPPORTS_TOUCH to (1 shl 6),
-        ROTATES_WITH_CONTENT to (1 shl 7),
-        DESTROY_CONTENT_ON_REMOVAL to (1 shl 8),
         TRUSTED to (1 shl 10),
         OWN_DISPLAY_GROUP to (1 shl 11),
         ALWAYS_UNLOCKED to (1 shl 12),
@@ -54,9 +54,8 @@ internal object VirtualDisplayFlags {
     )
 
     private val baseNames = listOf(
-        PUBLIC, PRESENTATION, OWN_CONTENT_ONLY, SUPPORTS_TOUCH, ROTATES_WITH_CONTENT,
-        DESTROY_CONTENT_ON_REMOVAL, TRUSTED, OWN_DISPLAY_GROUP, ALWAYS_UNLOCKED,
-        TOUCH_FEEDBACK_DISABLED, DEVICE_DISPLAY_GROUP,
+        PUBLIC, PRESENTATION, OWN_CONTENT_ONLY, SUPPORTS_TOUCH, TRUSTED, OWN_DISPLAY_GROUP,
+        ALWAYS_UNLOCKED, TOUCH_FEEDBACK_DISABLED, DEVICE_DISPLAY_GROUP,
     )
 
     @Volatile

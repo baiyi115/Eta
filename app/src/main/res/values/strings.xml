@@ -152,6 +152,9 @@
   <string name="appearance_title">Appearance &amp; Theme</string>
   <string name="appearance_group_color">Colors &amp; Theme</string>
   <string name="appearance_group_interface">Interface &amp; Effects</string>
+  <string name="appearance_ui_style">UI style</string>
+  <string name="appearance_ui_style_coui">COUI</string>
+  <string name="appearance_ui_style_miuix">Miuix</string>
   <string name="appearance_theme_mode">Theme mode</string>
   <string name="appearance_theme_system">Follow system</string>
   <string name="appearance_theme_light">Light</string>
@@ -1467,4 +1470,8 @@
   <string name="chat_reply_image_failed">Unable to load screenshot</string>
   <string name="tool_phone_use">Phone use</string>
   <string name="tool_background_phone_use">Background phone use</string>
+  <string name="conversation_branch">Branch into a new conversation</string>
+  <string name="conversation_branch_title">%1$s · Branch</string>
+  <string name="conversation_branch_unavailable">Cannot branch here: only turns with complete context and finished tool calls are supported.</string>
+  <string name="conversation_branch_failed">Could not create a branch. The original conversation has been kept. Please try again.</string>
 </resources>

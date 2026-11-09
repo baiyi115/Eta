@@ -13,6 +13,7 @@ import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.concurrent.thread
 import kotlin.system.exitProcess
 import org.json.JSONObject
 
@@ -72,7 +73,12 @@ internal object VirtualDisplayCommandMain {
     const val READY_PREFIX = "ETA_VD_READY:"
     const val RESULT_PREFIX = "ETA_VD_RESULT:"
 
-    private const val IME_POLICY_HIDE = 2
+    // 静态强引用持有 VirtualDisplay 与 Surface，防止 ART 局部栈帧优化在等待期间提前触发 GC finalize 销毁虚拟屏。
+    @Volatile
+    private var retainedVirtualDisplay: android.hardware.display.VirtualDisplay? = null
+
+    @Volatile
+    private var retainedSurface: Surface? = null
 
     @JvmStatic
     @Suppress("DEPRECATION")
@@ -112,6 +118,10 @@ internal object VirtualDisplayCommandMain {
     }
 
     private fun holdVirtualDisplay(request: JSONObject, reader: BufferedReader) {
+        if (!CanvasRoutingPolicy.supportsBackgroundDisplay(android.os.Build.VERSION.SDK_INT)) {
+            println(RESULT_PREFIX + JSONObject().put("ok", false).put("code", "DISPLAY_ISOLATION_UNSUPPORTED"))
+            exitProcess(1)
+        }
         val userId = request.optInt("user_id", 0)
         val token = request.optString("surface_token")
         val width = request.optInt("width", 1080).coerceIn(320, 4096)
@@ -125,11 +135,7 @@ internal object VirtualDisplayCommandMain {
         }
 
         // 优先切换至 SYSTEM_UID (1000) 以通过 DisplayManagerService 对 ADD_TRUSTED_DISPLAY 与 CAPTURE_VIDEO_OUTPUT 的校验
-        runCatching {
-            if (Process.myUid() == Process.ROOT_UID) {
-                android.system.Os.setuid(Process.SYSTEM_UID)
-            }
-        }
+        switchToSystemUidIfPossible()
 
         val context = systemContext()
         val virtualDisplay = createTrustedVirtualDisplay(context, surface, width, height, densityDpi)
@@ -147,26 +153,40 @@ internal object VirtualDisplayCommandMain {
             exitProcess(1)
         }
 
-        // 两个准备动作都只尽力而为：失败时虚拟屏仍然可用，只是输入回退到无障碍手势。
-        runCatching { configureImePolicy(displayId) }
+        retainedVirtualDisplay = virtualDisplay
+        retainedSurface = surface
+        // 两个隔离准备都只尽力而为：失败时虚拟屏仍然可用，定向输入回退无障碍手势，
+        // IME 策略保持系统默认，而不是让整次后台执行直接失败。
+        runCatching { applyDisplayImePolicyHide(displayId) }
         runCatching { VirtualDisplayInput.configure(context) }
 
         println("$READY_PREFIX$displayId")
         System.out.flush()
 
-        try {
-            while (true) {
-                val line = reader.readLine() ?: break
-                val text = line.trim()
-                if (text.isEmpty()) continue
-                if (text == "release" || text == "stop") break
-                handleCommand(text, displayId)
+        val mainHandler = android.os.Handler(Looper.getMainLooper())
+        thread(name = "eta-vd-stdin", isDaemon = true) {
+            try {
+                while (true) {
+                    val line = reader.readLine() ?: break
+                    val text = line.trim()
+                    if (text.isEmpty()) continue
+                    if (text == "release" || text == "stop") break
+                    handleCommand(text, displayId)
+                }
+            } catch (_: Throwable) {
+                // 宿主关闭管道或取消任务
+            } finally {
+                mainHandler.post {
+                    releaseRetainedDisplay()
+                    exitProcess(0)
+                }
             }
-        } catch (_: Throwable) {
-            // 宿主关闭管道或取消任务
+        }
+
+        try {
+            Looper.loop()
         } finally {
-            runCatching { virtualDisplay.release() }
-            runCatching { surface.release() }
+            releaseRetainedDisplay()
         }
         exitProcess(0)
     }
@@ -257,27 +277,46 @@ internal object VirtualDisplayCommandMain {
         }.getOrDefault(-1)
     }
 
-    private fun configureImePolicy(displayId: Int) {
-        val binder = Class.forName("android.os.ServiceManager")
-            .getMethod("getService", String::class.java)
-            .invoke(null, "window")
-        val windowManager = Class.forName("android.view.IWindowManager\$Stub")
-            .getMethod("asInterface", IBinder::class.java)
-            .invoke(null, binder)
-        val setPolicy = windowManager.javaClass.getMethod(
-            "setDisplayImePolicy",
-            Int::class.javaPrimitiveType,
-            Int::class.javaPrimitiveType,
-        )
-        setPolicy.invoke(windowManager, displayId, IME_POLICY_HIDE)
-    }
-
     private fun systemContext(): Context {
         if (Looper.getMainLooper() == null) Looper.prepareMainLooper()
         val activityThread = Class.forName("android.app.ActivityThread")
         val thread = activityThread.getMethod("systemMain").invoke(null)
         return activityThread.getMethod("getSystemContext").invoke(thread) as Context
     }
+
+    private fun releaseRetainedDisplay() {
+        val vd = retainedVirtualDisplay
+        val surf = retainedSurface
+        retainedVirtualDisplay = null
+        retainedSurface = null
+        runCatching { vd?.release() }
+        runCatching { surf?.release() }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun switchToSystemUidIfPossible() {
+        runCatching {
+            if (Process.myUid() == Process.ROOT_UID) {
+                android.system.Os.setuid(Process.SYSTEM_UID)
+            }
+        }
+    }
+
+    private fun applyDisplayImePolicyHide(displayId: Int): Boolean = runCatching {
+        if (!CanvasRoutingPolicy.isVirtualDisplay(displayId)) return@runCatching false
+        switchToSystemUidIfPossible()
+        val wmgClass = Class.forName("android.view.WindowManagerGlobal")
+        val wms = wmgClass.getMethod("getWindowManagerService").invoke(null) ?: return@runCatching false
+        val setPolicy = wms.javaClass.methods.firstOrNull {
+            it.name == "setDisplayImePolicy" && it.parameterCount == 2
+        } ?: return@runCatching false
+        setPolicy.invoke(wms, displayId, CanvasRoutingPolicy.DISPLAY_IME_POLICY_HIDE)
+        val getPolicy = wms.javaClass.methods.firstOrNull {
+            it.name == "getDisplayImePolicy" && it.parameterCount == 1
+        }
+        val actual = getPolicy?.invoke(wms, displayId) as? Int
+        actual == CanvasRoutingPolicy.DISPLAY_IME_POLICY_HIDE
+    }.getOrDefault(false)
 
     private fun acquireSurfaceFromApp(userId: Int, surfaceToken: String): Surface? {
         val activityManager = Class.forName("android.app.ActivityManager")

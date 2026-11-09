@@ -46,9 +46,12 @@ class VirtualDisplayFlagsTest {
         val flags = VirtualDisplayFlags.compose(emptyMap())
 
         assertEquals(
-            (1 shl 0) or (1 shl 1) or (1 shl 3) or (1 shl 6) or (1 shl 7) or (1 shl 8) or
+            (1 shl 0) or (1 shl 1) or (1 shl 3) or (1 shl 6) or
                 (1 shl 10) or (1 shl 11) or (1 shl 12) or (1 shl 13) or (1 shl 15),
             flags,
         )
+        // 不随内容旋转，也不在移除时销毁内容。
+        assertEquals(0, flags and (1 shl 7))
+        assertEquals(0, flags and (1 shl 8))
     }
 }

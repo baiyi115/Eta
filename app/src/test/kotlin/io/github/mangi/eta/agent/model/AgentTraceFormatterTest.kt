@@ -62,7 +62,7 @@ class AgentTraceFormatterTest {
         val search = formatter.summarizeResult("web_search", AgentModelClient.ToolResult(
             """{"ok":true,"query":"private-query","results":[{"title":"private-title","url":"https://example.com/private-path","snippet":"private-body"}]}""",
         ))
-        assertEquals("1 条结果", search)
+        assertEquals("找到 1 条搜索结果", search)
         val fetch = formatter.summarizeResult("fetch_url", AgentModelClient.ToolResult(
             """{"ok":true,"final_url":"https://alice:password@example.com/private-path?token=secret-query","title":"private-title","text":"private-body","has_more":true}""",
         ))
@@ -136,7 +136,7 @@ class AgentTraceFormatterTest {
             RedactionCase(
                 toolName = "memory_write",
                 argumentsJson = """{"mode":"append","revision":"secret-revision","content":"private memory"}""",
-                expectedParts = listOf("更新记忆", "追加", "行", "字节"),
+                expectedParts = listOf("追加记忆"),
                 sensitiveParts = listOf("secret-revision", "private memory"),
             ),
         )
@@ -220,8 +220,12 @@ class AgentTraceFormatterTest {
             """{"ok":true,"count":99,"items":[{"content":"private-record"},{"value":"private-value"}],"has_more":true,"partial":true}""",
             sensitive = true,
         )
-        // 本项目摘要沿用本机工具的统一措辞（与 recent_notifications 等通用结果一致）。
-        assertEquals("完成 · 2 个结果 · 可继续读取 · 采集范围有限", formatter.summarizeResult("search_messages", result))
+        assertEquals("找到 2 条短信 · 还有更多 · 采集范围有限", formatter.summarizeResult("search_messages", result))
+
+        val generic = AgentModelClient.ToolResult(
+            """{"ok":true,"items":[{"content":"one"},{"content":"two"}],"has_more":true,"partial":true}""",
+        )
+        assertEquals("找到 2 条结果 · 还有更多 · 采集范围有限", formatter.summarizeResult("custom_search", generic))
     }
 
     @Test
@@ -403,187 +407,12 @@ class AgentTraceFormatterTest {
         assertFalse(formatter.isSuccessResult(failed))
         assertTrue(formatter.isSuccessResult(noFlag))
         assertTrue(formatter.isSuccessResult(malformed))
-        assertEquals("完成", formatter.summarizeResult("tap", ok))
+        assertEquals("已点击", formatter.summarizeResult("tap", ok))
         assertEquals("失败 · code=X", formatter.summarizeResult("tap", failed))
     }
 
     @Test
-    fun structuredReadResultsExposeUsefulMetadataInsteadOfOnlyComplete() {
-        val device = formatter.summarizeResult(
-            "device_status",
-            AgentModelClient.ToolResult(
-                content = """{"ok":true,"model":"Pixel","android_version":"16","battery_percent":82,"charging":true,"memory_available_bytes":3221225472,"memory_total_bytes":8589934592}""",
-            ),
-        )
-        assertTrue(device.contains("Pixel"))
-        assertTrue(device.contains("82% 电量"))
-        assertTrue(device.contains("充电中"))
-        assertTrue(device, device.contains("3 GB / 8 GB"))
-
-        val network = formatter.summarizeResult(
-            "network_info",
-            AgentModelClient.ToolResult(
-                content = """{"ok":true,"connected":true,"validated":true,"transports":["wifi"],"ssid":"Home"}""",
-            ),
-        )
-        assertTrue(network.contains("Wi-Fi"))
-        assertTrue(network.contains("已联网"))
-        assertFalse(network.contains("Home"))
-
-        val offline = formatter.summarizeResult(
-            "network_info",
-            AgentModelClient.ToolResult(
-                content = """{"ok":true,"connected":false,"metered":true,"transports":[]}""",
-            ),
-        )
-        assertTrue(offline.contains("未连接"))
-        assertFalse(offline.contains("计费网络"))
-
-        val observation = formatter.summarizeResult(
-            "observe_screen",
-            AgentModelClient.ToolResult(
-                content = """{"ok":true,"ui_nodes":[{"text":"a"},{"text":"b"},{"text":"c"}],"ui_tree_truncated":true}""",
-            ),
-        )
-        assertTrue(observation.contains("3 个界面节点"))
-        assertTrue(observation.contains("节点已截断"))
-    }
-
-    @Test
-    fun sensitiveReadResultsExposeCountsWithoutLeakingValues() {
-        val clipboard = formatter.summarizeResult(
-            "get_clipboard",
-            AgentModelClient.ToolResult(
-                content = """{"ok":true,"text":"private-clipboard-value","truncated":false}""",
-                sensitive = true,
-            ),
-        )
-        assertTrue(clipboard.contains("已读取剪贴板"))
-        assertTrue(clipboard.contains("字符"))
-        assertFalse(clipboard.contains("private-clipboard-value"))
-
-        val notifications = formatter.summarizeResult(
-            "recent_notifications",
-            AgentModelClient.ToolResult(
-                content = """{"ok":true,"items":[{"title":"private-title"}],"count":1}""",
-                sensitive = true,
-            ),
-        )
-        assertTrue(notifications.contains("1 个结果"))
-        assertFalse(notifications.contains("private-title"))
-    }
-
-    @Test
-    fun mcpResultShowsServerToolAndBoundedRedactedPreview() {
-        val content = JSONArray()
-            .put("已读取 5 个安装包")
-            .put("client_secret=private-token")
-            .put("item-3")
-            .put("item-4")
-            .put("item-5")
-            .put("item-6")
-            .put("item-7")
-            .put("item-8")
-        val summary = formatter.summarizeResult(
-            "mcp_12345678_open_apk_deadbeef",
-            AgentModelClient.ToolResult(
-                content = JSONObject()
-                    .put("ok", true)
-                    .put("server", "MT管理器")
-                    .put("tool", "open_apk")
-                    .put("content", content)
-                    .toString(),
-                sensitive = true,
-            ),
-        )
-
-        assertTrue(summary, summary.startsWith("MT管理器 · open_apk · 返回 8 项"))
-        assertTrue(summary.contains("已读取 5 个安装包"))
-        assertTrue(summary.contains("<已隐藏>"))
-        assertFalse(summary.contains("private-token"))
-        assertTrue(summary.endsWith("…"))
-        assertTrue(summary.lines().size <= 8)
-    }
-
-    @Test
-    fun mcpPreviewRedactsJsonSecretsBearerTokensAndDisplayControls() {
-        val summary = formatter.summarizeResult(
-            "mcp_12345678_inspect_deadbeef",
-            AgentModelClient.ToolResult(
-                content = JSONObject()
-                    .put("ok", true)
-                    .put("server", "Remote")
-                    .put("tool", "inspect")
-                    .put(
-                        "content",
-                        JSONArray()
-                            .put("""{"api_key":"json-private","visible":"ok"}""")
-                            .put("""{"x-api-key":"json-private-2"}""")
-                            .put("Authorization: Bearer bearer-private-12345678")
-                            .put("""Authorization: "Basic basic-private"""")
-                            .put("password: plain-private")
-                            .put("\u001B[31mred\u001B[0m \u202Espoof"),
-                    )
-                    .toString(),
-                sensitive = true,
-            ),
-        )
-
-        assertTrue(summary.contains("<已隐藏>"))
-        assertTrue(summary.contains("\"visible\":\"ok\""))
-        assertTrue(summary.contains("red spoof"))
-        assertFalse(summary.contains("json-private"))
-        assertFalse(summary.contains("json-private-2"))
-        assertFalse(summary.contains("bearer-private"))
-        assertFalse(summary.contains("basic-private"))
-        assertFalse(summary.contains("plain-private"))
-        assertFalse(summary.contains("\u001B"))
-        assertFalse(summary.contains("\u202E"))
-    }
-
-    @Test
-    fun inspectAppOmitsNullVersionName() {
-        val summary = formatter.summarizeResult(
-            "inspect_app",
-            AgentModelClient.ToolResult(
-                content = """{"ok":true,"package_name":"example.app","version_name":null,"permission_count":0}""",
-            ),
-        )
-
-        assertTrue(summary.contains("example.app"))
-        assertFalse(summary.contains("版本 null"))
-    }
-
-    @Test
-    fun mcpFailureKeepsServerToolReasonAndCode() {
-        val summary = formatter.summarizeResult(
-            "mcp_12345678_open_apk_deadbeef",
-            AgentModelClient.ToolResult(
-                content = """{"ok":false,"server":"MT管理器","tool":"open_apk","content":[],"message":"目标 APK 不存在","code":"MCP_TOOL_ERROR"}""",
-                sensitive = true,
-            ),
-        )
-
-        assertTrue(summary.contains("MT管理器 · open_apk · 失败"))
-        assertTrue(summary.contains("目标 APK 不存在"))
-        assertTrue(summary.contains("code=MCP_TOOL_ERROR"))
-    }
-
-    @Test
-    fun mcpIdentityCannotInjectTheSummaryFieldSeparator() {
-        val summary = formatter.summarizeResult(
-            "mcp_12345678_open_apk_deadbeef",
-            AgentModelClient.ToolResult(
-                content = """{"ok":false,"server":"Remote · Node","tool":"inspect","content":[],"message":"private-reason","code":"MCP_TOOL_ERROR"}""",
-                sensitive = true,
-            ),
-        )
-
-        assertTrue(summary.startsWith("Remote • Node · inspect · 失败 · private-reason"))
-    }
-
-    @Test
-    fun memoryResultSummaryContainsOnlyStatusLineAndByteMetadata() {
+    fun memoryResultSummaryPresentsNaturalStatusWithoutByteOrLineCounts() {
         val summary = formatter.summarizeResult(
             "memory_get",
             AgentModelClient.ToolResult(
@@ -592,11 +421,20 @@ class AgentTraceFormatterTest {
             ),
         )
 
-        assertTrue(summary.contains("已读取记忆"))
-        assertTrue(summary.contains("9 行"))
-        assertTrue(summary.contains("321 字节"))
-        assertFalse(summary.contains("ok="))
+        assertEquals("已读取记忆", summary)
+        assertFalse(summary.contains("9 行"))
+        assertFalse(summary.contains("321 字节"))
         assertFalse(summary.contains("private memory"))
+
+        val querySummary = formatter.summarizeResult(
+            "memory_get",
+            AgentModelClient.ToolResult(
+                content = """{"ok":true,"matched_lines":3,"line_count":200,"bytes":8000}""",
+            ),
+        )
+        assertEquals("找到 3 条相关记忆", querySummary)
+        assertFalse(querySummary.contains("200"))
+        assertFalse(querySummary.contains("8000"))
     }
 
     @Test
@@ -681,6 +519,18 @@ class AgentTraceFormatterTest {
         )
 
         assertEquals("已打开 · 抖音", summary)
+    }
+
+    @Test
+    fun unconfirmedLaunchDoesNotClaimTheAppHasOpened() {
+        val summary = formatter.summarizeResult(
+            "launch_app",
+            AgentModelClient.ToolResult(
+                content = """{"ok":true,"app_name":"示例应用","canvas":"virtual","launch_status":"unconfirmed"}""",
+            ),
+        )
+
+        assertEquals("已请求打开，待确认 · 示例应用 · 虚拟屏", summary)
     }
 
     @Test

@@ -26,14 +26,19 @@ import android.window.OnBackInvokedDispatcher
 import android.window.OnBackInvokedCallback
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.ComposeView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
+import androidx.lifecycle.setViewTreeLifecycleOwner
 import androidx.savedstate.SavedStateRegistry
 import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
+import androidx.savedstate.setViewTreeSavedStateRegistryOwner
+import com.itos.coui.effect.LocalCouiContourGlowEnabled
 import io.github.mangi.eta.EtaApp
 import io.github.mangi.eta.agent.accessibility.AgentAccessibilityService
 import io.github.mangi.eta.agent.device.RootAccess
@@ -57,7 +62,10 @@ import io.github.mangi.eta.config.Prefs
 import io.github.mangi.eta.core.AndroidAgentLogger
 import io.github.mangi.eta.core.ModuleConfig
 import io.github.mangi.eta.core.safeLogType
+import io.github.mangi.eta.data.model.AppearanceSettings
+import io.github.mangi.eta.data.repository.AppearanceSettingsRepository
 import io.github.mangi.eta.data.repository.RuntimeConfigRepository
+import io.github.mangi.eta.ui.app.AgentAppTheme
 import kotlin.concurrent.thread
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -1260,12 +1268,24 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     }
 
     private fun createOverlayComposeView(content: @Composable () -> Unit): ComposeView =
-        requireNotNull(overlayWindowHost).createComposeView {
-            MiuixTheme(colors = if (isNightMode()) darkColorScheme() else lightColorScheme()) {
-                // 部分 ROM 会给 TYPE_ACCESSIBILITY_OVERLAY 分配软件 Canvas；Miuix 的
-                // RuntimeShader 只检查系统版本，因此系统浮层统一使用其普通圆角回退。
-                CompositionLocalProvider(LocalSquircleEnabled provides false) {
-                    content()
+        ComposeView(overlayContext()).apply {
+            setViewTreeLifecycleOwner(this@AgentRuntimeService)
+            setViewTreeSavedStateRegistryOwner(this@AgentRuntimeService)
+            setContent {
+                val appearance by AppearanceSettingsRepository.settingsFlow()
+                    .collectAsState(initial = AppearanceSettings())
+                AgentAppTheme(
+                    appearance = appearance,
+                    applyInterfaceScale = false,
+                ) {
+                    // 部分 ROM 会给 TYPE_ACCESSIBILITY_OVERLAY 分配软件 Canvas；Miuix 与 COUI 的
+                    // RuntimeShader 只检查系统版本，因此系统浮层统一使用无 RuntimeShader 的圆角回退。
+                    CompositionLocalProvider(
+                        LocalSquircleEnabled provides false,
+                        LocalCouiContourGlowEnabled provides false,
+                    ) {
+                        content()
+                    }
                 }
             }
         }

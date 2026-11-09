@@ -19,6 +19,24 @@ internal object CanvasRoutingPolicy {
     // 建屏标志位不在这里维护：ROM 会改写这些比特（例如 DEVICE_DISPLAY_GROUP 与
     // STEAL_TOP_FOCUS_DISABLED 都曾占用 1 shl 15），唯一来源是 VirtualDisplayFlags.interactive()。
 
+    /** android.view.Display.getFlags() 返回的受信任标志位，仅用于日志核对虚拟屏是否取得系统级 TRUSTED 权限。 */
+    const val DISPLAY_FLAG_TRUSTED = 1 shl 7
+    const val DISPLAY_FLAG_OWN_FOCUS = 1 shl 11
+    const val DISPLAY_FLAG_STEAL_TOP_FOCUS_DISABLED = 1 shl 12
+
+    /** WindowManager IME 显示策略：禁止虚拟屏在主屏回退弹出或抢占软键盘。 */
+    const val DISPLAY_IME_POLICY_LOCAL = 0
+    const val DISPLAY_IME_POLICY_FALLBACK_DISPLAY = 1
+    const val DISPLAY_IME_POLICY_HIDE = 2
+
+    // Android 13 尚无独立焦点与禁止抢占顶层焦点的组合能力，后台画布从 Android 14 起启用。
+    fun supportsBackgroundDisplay(sdkInt: Int): Boolean = sdkInt >= 34
+
+    fun hasRequiredDisplayFlags(flags: Int): Boolean {
+        val required = DISPLAY_FLAG_TRUSTED or DISPLAY_FLAG_OWN_FOCUS or DISPLAY_FLAG_STEAL_TOP_FOCUS_DISABLED
+        return flags and required == required
+    }
+
     private val MAIN_DISPLAY_ONLY_PACKAGES = setOf(
         "android",
         "com.android.systemui",
