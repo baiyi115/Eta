@@ -2,6 +2,7 @@ package io.github.mangi.eta.agent.runtime
 
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
+import android.annotation.SuppressLint
 import android.app.Service
 import android.app.ActivityOptions
 import android.app.PendingIntent
@@ -9,14 +10,17 @@ import io.github.mangi.eta.ui.MainActivity
 import android.os.Build
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.content.res.Configuration
 import android.graphics.PixelFormat
 import android.graphics.Rect
+import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.Message
 import android.os.Messenger
+import android.os.PowerManager
 import android.os.Process
 import android.provider.Settings
 import android.view.Gravity
@@ -60,7 +64,6 @@ import io.github.mangi.eta.agent.virtualdisplay.VirtualDisplayController
 import io.github.mangi.eta.agent.virtualdisplay.VirtualDisplaySnapshot
 import io.github.mangi.eta.config.Prefs
 import io.github.mangi.eta.core.AndroidAgentLogger
-import io.github.mangi.eta.core.ModuleConfig
 import io.github.mangi.eta.core.safeLogType
 import io.github.mangi.eta.data.model.AppearanceSettings
 import io.github.mangi.eta.data.repository.AppearanceSettingsRepository
@@ -104,6 +107,8 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     @Volatile private var destroyed = false
     @Volatile private var lastGuiOwnerRunId: String? = null
     private var displayedRun: RuntimeRunRegistry.Run? = null
+    private var screenWakeLock: PowerManager.WakeLock? = null
+    private var localPrefsListener: SharedPreferences.OnSharedPreferenceChangeListener? = null
 
     private var windowManager: WindowManager? = null
     private var overlayWindowHost: AgentOverlayWindowHost? = null
@@ -155,6 +160,15 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_START)
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
         AgentOverlayClearance.attach(clearanceHost)
+        Prefs.localAgentPreferences()?.let { prefs ->
+            val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+                if (key == Prefs.Keys.AGENT_KEEP_SCREEN_ON_ENABLED) {
+                    mainHandler.post(::updateKeepScreenOn)
+                }
+            }
+            localPrefsListener = listener
+            prefs.registerOnSharedPreferenceChangeListener(listener)
+        }
         serviceScope.launch { guiControl.state.collect(::applyGuiControlState) }
         serviceScope.launch {
             VirtualDisplayController.snapshots.collect { snapshot ->
@@ -193,6 +207,10 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     override fun onDestroy() {
         destroyed = true
         if (activeInstance === this) activeInstance = null
+        localPrefsListener?.let { listener ->
+            Prefs.localAgentPreferences()?.unregisterOnSharedPreferenceChangeListener(listener)
+        }
+        localPrefsListener = null
         setKeepScreenOn(false)
         runs.all().forEach { run ->
             run.releaseIncoming()
@@ -226,6 +244,8 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             if (!isMessageSenderAllowed(msg)) {
                 if (msg.what == AgentRuntimeWire.MSG_START_RUN) {
                     AgentRuntimeWire.closeImageDescriptors(msg.data)
+                } else if (msg.what == AgentRuntimeWire.MSG_STEER) {
+                    AgentWireText.close(msg.data)
                 }
                 return
             }
@@ -257,6 +277,10 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                 AgentRuntimeWire.MSG_CANCEL -> {
                     val runId = msg.data?.let(AgentRuntimeWire::runIdFromBundle).orEmpty()
                     if (runId.isNotBlank()) cancelRun(runId)
+                }
+
+                AgentRuntimeWire.MSG_STEER -> {
+                    steerRun(msg.data, msg.replyTo)
                 }
 
                 AgentRuntimeWire.MSG_ACK_RESULT -> {
@@ -316,7 +340,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                 } else {
                     val runtimeConfig = runBlocking {
                         if (AgentRuntimeRequestConfigResolver.usesDefaultRuntimeConfig(request)) {
-                            RuntimeConfigRepository.currentRuntimeConfig()
+                            RuntimeConfigRepository.assistantOverlayRuntimeConfig()
                         } else {
                             RuntimeConfigRepository.oauthRuntimeConfigFor(
                                 providerId = request.config.providerId,
@@ -452,6 +476,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             }
         }
         publishExecutionState()
+        updateKeepScreenOn()
         return run
     }
 
@@ -832,6 +857,56 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         }
     }
 
+    private fun steerRun(data: Bundle?, replyTo: Messenger?) {
+        if (data == null) {
+            sendSteerResponse("", replyTo, accepted = false)
+            return
+        }
+        var runId = ""
+        val text = try {
+            runId = AgentRuntimeWire.runIdFromBundle(data)
+            AgentRuntimeWire.steerTextFromBundle(data).trim()
+        } catch (throwable: Throwable) {
+            AndroidAgentLogger.warnThrottled("runtime_invalid_steer_request") {
+                "Agent runtime rejected invalid steer request: type=${throwable.safeLogType()}"
+            }
+            ""
+        } finally {
+            AgentWireText.close(data)
+        }
+        val run = runId.takeIf(String::isNotBlank)?.let(runs::get)
+        val event = if (run != null && text.isNotBlank()) run.supplement(text) else null
+        if (run == null || event == null) {
+            sendSteerResponse(runId, replyTo, accepted = false)
+            return
+        }
+        AndroidAgentLogger.info(
+            "Agent runtime supplement received: index=${event.index}, chars=${event.text.length}"
+        )
+        run.overlayState = run.overlayState.applyEvent(event)
+        if (displayedRun === run && guiControl.state.value.ownerRunId == run.runId && !guiControl.state.value.userPaused) {
+            state.value = run.overlayState
+        }
+        sendSteerResponse(runId, replyTo, accepted = true, supplementIndex = event.index)
+    }
+
+    private fun sendSteerResponse(
+        runId: String,
+        replyTo: Messenger?,
+        accepted: Boolean,
+        supplementIndex: Int = 0,
+    ) {
+        runCatching {
+            val msg = Message.obtain(null, AgentRuntimeWire.MSG_STEER_RESPONSE)
+            msg.data = AgentRuntimeWire.steerResponseBundle(runId, accepted, supplementIndex)
+            replyTo?.send(msg)
+        }.onFailure { throwable ->
+            AndroidAgentLogger.warnThrottled("runtime_steer_response_delivery_failed") {
+                "Agent runtime steer response failed: type=${throwable.safeLogType()}"
+            }
+        }
+    }
+
     private fun requestPause(runId: String?) {
         if (runId != null) guiControl.pauseForUser(runId)
     }
@@ -920,12 +995,14 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     }
 
     private fun updateKeepScreenOn() {
-        val guiState = guiControl.state.value
-        val session = guiState.ownerRunId?.let(runs::get)?.session
-        setKeepScreenOn(
-            !guiState.userPaused && session != null && !session.isTerminal &&
-                !session.controller.isCancelled && !session.controller.isPaused,
-        )
+        val enabled = !destroyed &&
+            Prefs.isEnabled(Prefs.Keys.AGENT_KEEP_SCREEN_ON_ENABLED) &&
+            runs.all().any { run ->
+                !run.session.isTerminal &&
+                    !run.session.controller.isCancelled &&
+                    !run.session.controller.isPaused
+            }
+        setKeepScreenOn(enabled)
     }
 
     private fun applyGuiControlState(guiState: GuiControlCoordinator.State) {
@@ -986,9 +1063,25 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         )
     }
 
+    @SuppressLint("WakelockTimeout")
     private fun setKeepScreenOn(enabled: Boolean) {
         keepScreenOnState.value = enabled
         capsuleView?.keepScreenOn = enabled
+        if (enabled) {
+            val wakeLock = screenWakeLock ?: runCatching {
+                @Suppress("DEPRECATION")
+                getSystemService(PowerManager::class.java)
+                    ?.newWakeLock(PowerManager.SCREEN_BRIGHT_WAKE_LOCK, WAKE_LOCK_TAG)
+                    ?.apply { setReferenceCounted(false) }
+            }.getOrNull()?.also { screenWakeLock = it }
+            if (wakeLock != null && !wakeLock.isHeld) {
+                runCatching { wakeLock.acquire() }
+            }
+        } else {
+            screenWakeLock?.let { wakeLock ->
+                if (wakeLock.isHeld) runCatching { wakeLock.release() }
+            }
+        }
     }
 
     private fun showOverlay() {
@@ -1499,14 +1592,8 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         overlayWindowHost = null
     }
 
-    private fun isMessageSenderAllowed(msg: Message): Boolean {
-        val uid = msg.sendingUid
-        if (uid == Process.myUid()) return true
-        val packages = runCatching {
-            packageManager.getPackagesForUid(uid)
-        }.getOrNull().orEmpty()
-        return packages.any { it in ModuleConfig.AGENT_RUNTIME_ENTRY_PACKAGES }
-    }
+    private fun isMessageSenderAllowed(msg: Message): Boolean =
+        msg.sendingUid == Process.myUid()
 
     private fun isNightMode(): Boolean {
         val mode = resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK
@@ -1522,7 +1609,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         @Volatile
         private var activeInstance: AgentRuntimeService? = null
 
-        // 只投影到 App 与 GUI 浮层的现有窗口，窗口不可见时由系统恢复息屏。
+        // 有活跃任务且开启常亮开关时为 true；同步投影到 App 前台窗口、悬浮窗并持有屏幕唤醒锁。
         private val keepScreenOnState = MutableStateFlow(false)
         val keepScreenOn = keepScreenOnState.asStateFlow()
 
@@ -1532,6 +1619,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         }
 
         private const val ACTION_KEEP_ALIVE = "io.github.mangi.eta.agent.runtime.KEEP_ALIVE"
+        private const val WAKE_LOCK_TAG = "Eta:AgentRun"
         private const val HIDE_DELAY_MS = 2_500L
         private const val RESULT_REVIEW_DELAY_MS = 120_000L
         private const val RESULT_CARD_HEIGHT_RATIO = 0.5f

@@ -148,14 +148,10 @@ internal class AgentRuntimeRunExecutor(
             } else {
                 AgentMemoryContext.DISABLED
             }
-            if (request.config.terminalTools) {
-                // 启动探测由 App 拥有；模型首轮等待其结果，避免把检测中的授权当成普通设备。
-                runBlocking {
-                    while (io.github.mangi.eta.agent.device.RootAccess.state.value.isChecking) {
-                        runController.throwIfCancelled()
-                        kotlinx.coroutines.delay(100)
-                    }
-                }
+            if (request.config.terminalTools || request.config.deviceDirectTools) {
+                // 启动探测由 App 拥有；模型首轮等待其结果，并在历史曾授权但临时未就绪时自动复检。
+                runController.throwIfCancelled()
+                io.github.mangi.eta.agent.device.RootAccess.awaitOrRetryIfPreviouslyGranted(appContext)
             }
             val pendingSkillConflict = PendingSkillConflictCapabilityParser.parse(request.history)
             val mcpSnapshot = runBlocking {
@@ -251,14 +247,26 @@ internal class AgentRuntimeRunExecutor(
             toolExecutor = routingExecutor
             toolsBinding = runController.register(routingExecutor::close)
             timing.preparationFinished(skillContext.installedSkills.size)
-            val historyTool = conversationId?.let { id ->
-                ConversationHistoryTool {
-                    val checkpoint = runBlocking { EtaDatabase.get(appContext).conversationDao().contextCheckpoint(id) }
-                    val journal = AgentConversationCodec.decodeTranscript(checkpoint?.journalJson)
-                        .ifEmpty { AgentConversationCodec.decodeTranscript(checkpoint?.historyJson) }
-                    journal + session.transcript
+            // 手动压缩复用主会话工具目录以保持 Provider 前缀缓存，必须暴露与 OP_CHAT 一致的 conversation_history。
+            val historyTool = if (supportsHistoryTool(request.operation)) {
+                val id = conversationId
+                if (id != null) {
+                    ConversationHistoryTool {
+                        val checkpoint = runBlocking { EtaDatabase.get(appContext).conversationDao().contextCheckpoint(id) }
+                        val journal = AgentConversationCodec.decodeTranscript(checkpoint?.journalJson)
+                            .ifEmpty { AgentConversationCodec.decodeTranscript(checkpoint?.historyJson) }
+                        journal + session.transcript
+                    }
+                } else {
+                    val baseHistory = request.history + listOfNotNull(
+                        request.prompt.takeIf { it.isNotBlank() || request.images.isNotEmpty() }?.let { prompt ->
+                            AgentModelClient.buildUserHistoryMessage(prompt, request.images)
+                                .copy(messageId = "user-${request.runId}")
+                        },
+                    )
+                    ConversationHistoryTool { baseHistory + session.transcript }
                 }
-            }
+            } else null
             val subagentAllowed = {
                 request.config.subagentTools && currentPermissions().subagentTools
             }
@@ -287,20 +295,12 @@ internal class AgentRuntimeRunExecutor(
                     )
                 },
             )
-            val runTools = JSONArray(mcpTools.toString()).also { tools ->
-                if (subagentAllowed()) AgentSubagentToolCatalog.appendSchemas(tools)
-                if (historyTool != null) tools.put(AgentConversationToolCatalog.schema())
-                if (characterMemoryTools != null && memoryEnabled) {
-                    val temp = JSONArray().also(CharacterMemoryTools::appendSchemas)
-                    for (index in 0 until temp.length()) {
-                        val schema = temp.getJSONObject(index)
-                        val name = schema.getJSONObject("function").getString("name")
-                        if (Prefs.isToolEnabled(name)) {
-                            tools.put(schema)
-                        }
-                    }
-                }
-            }
+            val runTools = buildRunTools(
+                mcpTools = mcpTools,
+                subagentAllowed = subagentAllowed(),
+                includeHistoryTool = historyTool != null,
+                includeCharacterMemoryTools = characterMemoryTools != null && memoryEnabled,
+            )
             val runToolExecutor = AgentModelClient.ToolExecutor { call ->
                 if (call.name in AgentSubagentToolCatalog.names) {
                     if (!subagentAllowed()) {
@@ -515,5 +515,31 @@ internal class AgentRuntimeRunExecutor(
                     "Agent runtime event projection failed: type=${throwable.safeLogType()}"
                 }
             }
+    }
+
+    companion object {
+        internal fun supportsHistoryTool(operation: String): Boolean =
+            operation == AgentRuntimeWire.OP_CHAT || operation == AgentRuntimeWire.OP_COMPACT
+
+        internal fun buildRunTools(
+            mcpTools: JSONArray,
+            subagentAllowed: Boolean,
+            includeHistoryTool: Boolean,
+            includeCharacterMemoryTools: Boolean,
+            isToolEnabled: (String) -> Boolean = Prefs::isToolEnabled,
+        ): JSONArray = JSONArray(mcpTools.toString()).also { tools ->
+            if (subagentAllowed) AgentSubagentToolCatalog.appendSchemas(tools)
+            if (includeHistoryTool) tools.put(AgentConversationToolCatalog.schema())
+            if (includeCharacterMemoryTools) {
+                val temp = JSONArray().also(CharacterMemoryTools::appendSchemas)
+                for (index in 0 until temp.length()) {
+                    val schema = temp.getJSONObject(index)
+                    val name = schema.getJSONObject("function").getString("name")
+                    if (isToolEnabled(name)) {
+                        tools.put(schema)
+                    }
+                }
+            }
+        }
     }
 }

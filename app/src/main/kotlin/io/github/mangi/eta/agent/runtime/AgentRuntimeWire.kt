@@ -91,6 +91,12 @@ internal object AgentRuntimeWire {
     /** service -> client：返回各运行的会话归属与当前阶段。 */
     const val MSG_QUERY_ACTIVE_RUNS_RESPONSE = 17
 
+    /** client -> service：向运行中的 run 追加下一回合 steering 补充指令，不取消当前请求或工具。 */
+    const val MSG_STEER = 18
+
+    /** service -> client：返回 steering 是否已被当前活跃 run 接纳及分配的补充序号。 */
+    const val MSG_STEER_RESPONSE = 19
+
     private const val MODULE_PACKAGE = "io.github.mangi.eta"
     private const val SERVICE_CLASS = "io.github.mangi.eta.agent.runtime.AgentRuntimeService"
 
@@ -154,9 +160,10 @@ internal object AgentRuntimeWire {
     private const val KEY_HANDOFF_PAYLOAD = "handoff_payload"
     private const val KEY_HANDOFF_DISMISS_ENTRY_SURFACE_ON_FOREGROUND_OPERATION =
         "handoff_dismiss_entry_surface_on_foreground_operation"
-    private const val LEGACY_BREENO_HANDOFF_SOURCE = "breeno"
     private const val KEY_CREATED_AT = "created_at"
     private const val KEY_RESULTS = "results"
+    private const val KEY_STEER_TEXT = "steer_text"
+    private const val KEY_SUPPLEMENT_INDEX = "supplement_index"
     private const val MAX_RESULT_CONTENT_CHARS = 64_000
     private const val MAX_RESULT_REASONING_CHARS = 32_000
     private const val MAX_DRAIN_CONTENT_CHARS = 16_000
@@ -551,13 +558,10 @@ internal object AgentRuntimeWire {
             id = bundle.getString(KEY_HANDOFF_ID).orEmpty(),
             source = source,
             payload = bundle.getString(KEY_HANDOFF_PAYLOAD).orEmpty(),
-            dismissEntrySurfaceOnForegroundOperation = if (
-                bundle.containsKey(KEY_HANDOFF_DISMISS_ENTRY_SURFACE_ON_FOREGROUND_OPERATION)
-            ) {
-                bundle.getBoolean(KEY_HANDOFF_DISMISS_ENTRY_SURFACE_ON_FOREGROUND_OPERATION)
-            } else {
-                source == LEGACY_BREENO_HANDOFF_SOURCE
-            }
+            dismissEntrySurfaceOnForegroundOperation = bundle.getBoolean(
+                KEY_HANDOFF_DISMISS_ENTRY_SURFACE_ON_FOREGROUND_OPERATION,
+                false,
+            ),
         )
     }
 
@@ -674,6 +678,28 @@ internal object AgentRuntimeWire {
 
     fun attachRunSucceeded(bundle: Bundle): Boolean = bundle.getBoolean(KEY_OK)
 
+    fun steerBundle(runId: String, text: String, textCacheDir: File? = null): Bundle = Bundle().apply {
+        putString(KEY_RUN_ID, runId)
+        AgentWireText.put(this, KEY_STEER_TEXT, text, textCacheDir)
+    }
+
+    fun steerTextFromBundle(bundle: Bundle): String =
+        AgentWireText.read(bundle, KEY_STEER_TEXT).orEmpty()
+
+    fun steerResponseBundle(
+        runId: String,
+        accepted: Boolean,
+        supplementIndex: Int = 0,
+    ): Bundle = Bundle().apply {
+        putString(KEY_RUN_ID, runId)
+        putBoolean(KEY_OK, accepted)
+        putInt(KEY_SUPPLEMENT_INDEX, supplementIndex)
+    }
+
+    fun steerAcceptedFromBundle(bundle: Bundle): Boolean = bundle.getBoolean(KEY_OK)
+
+    fun steerSupplementIndexFromBundle(bundle: Bundle): Int = bundle.getInt(KEY_SUPPLEMENT_INDEX)
+
     fun runIdFromBundle(bundle: Bundle): String =
         bundle.getString(KEY_RUN_ID).orEmpty()
 
@@ -721,6 +747,8 @@ internal object AgentRuntimeWire {
                 event.tokensBefore?.let { putInt("tokens_before", it) }
                 event.tokensAfter?.let { putInt("tokens_after", it) }
                 putString("reason_code", event.reasonCode)
+                if (event.archiveId.isNotBlank()) putString("compaction_archive_id", event.archiveId)
+                event.usage?.takeUnless { it.isEmpty }?.let { putTokenUsage(it, prefix = "compaction_usage_") }
             }
 
             is AgentEvent.ModelRetryScheduled -> {
@@ -750,6 +778,7 @@ internal object AgentRuntimeWire {
                 putInt("index", event.index)
                 putString("block_id", event.blockId)
                 putString("name", event.name)
+                event.startedAtEpochMs?.let { putLong("started_at_epoch_ms", it) }
             }
 
             is AgentEvent.AssistantBlockDelta -> {
@@ -770,6 +799,7 @@ internal object AgentRuntimeWire {
                 putString("name", event.name)
                 putInt("content_chars", event.contentChars)
                 putString("replacement_content", event.replacementContent)
+                event.elapsedMs?.let { putLong("elapsed_ms", it) }
             }
 
             is AgentEvent.SearchSuggestions -> {
@@ -889,6 +919,8 @@ internal object AgentRuntimeWire {
             tokensBefore = bundle.optionalInt("tokens_before"),
             tokensAfter = bundle.optionalInt("tokens_after"),
             reasonCode = bundle.getString("reason_code").orEmpty(),
+            usage = bundle.getTokenUsage(prefix = "compaction_usage_").takeUnless { it.isEmpty },
+            archiveId = bundle.getString("compaction_archive_id").orEmpty(),
         )
         "model_retry_scheduled" -> AgentEvent.ModelRetryScheduled(
             round = bundle.getInt("round"),
@@ -915,6 +947,7 @@ internal object AgentRuntimeWire {
             index = bundle.getInt("index"),
             blockId = bundle.getString("block_id"),
             name = bundle.getString("name"),
+            startedAtEpochMs = bundle.optionalLong("started_at_epoch_ms"),
         )
 
         "assistant_block_delta" -> AgentEvent.AssistantBlockDelta(
@@ -937,6 +970,7 @@ internal object AgentRuntimeWire {
             name = bundle.getString("name"),
             contentChars = bundle.getInt("content_chars"),
             replacementContent = bundle.getString("replacement_content"),
+            elapsedMs = bundle.optionalLong("elapsed_ms"),
         )
 
         "search_suggestions" -> bundle.getString("html")
@@ -1041,35 +1075,39 @@ internal object AgentRuntimeWire {
             }
         }
 
-    private fun Bundle.putTokenUsage(usage: AgentTokenUsage) {
-        usage.contextTokens?.let { putInt("usage_context", it) }
-        usage.inputTokens?.let { putInt("usage_input", it) }
-        usage.outputTokens?.let { putInt("usage_output", it) }
-        usage.reasoningTokens?.let { putInt("usage_reasoning", it) }
-        usage.cachedTokens?.let { putInt("usage_cache", it) }
-        usage.stepCount?.let { putInt("usage_steps", it) }
-        usage.llmMs?.let { putLong("usage_llm_ms", it) }
-        usage.toolMs?.let { putLong("usage_tool_ms", it) }
-        usage.ttftMs?.let { putLong("usage_ttft_ms", it) }
-        usage.ttftSteps?.let { putInt("usage_ttft_steps", it) }
-        usage.decodeMs?.let { putLong("usage_decode_ms", it) }
-        usage.decodeTokens?.let { putInt("usage_decode_tokens", it) }
+    private fun Bundle.putTokenUsage(usage: AgentTokenUsage, prefix: String = "usage_") {
+        usage.contextTokens?.let { putInt("${prefix}context", it) }
+        usage.inputTokens?.let { putInt("${prefix}input", it) }
+        usage.outputTokens?.let { putInt("${prefix}output", it) }
+        usage.reasoningTokens?.let { putInt("${prefix}reasoning", it) }
+        usage.cachedTokens?.let { putInt("${prefix}cache", it) }
+        usage.cacheWriteTokens?.let { putInt("${prefix}cache_write", it) }
+        usage.requestKind?.takeIf { it.isNotBlank() }?.let { putString("${prefix}request_kind", it) }
+        usage.stepCount?.let { putInt("${prefix}steps", it) }
+        usage.llmMs?.let { putLong("${prefix}llm_ms", it) }
+        usage.toolMs?.let { putLong("${prefix}tool_ms", it) }
+        usage.ttftMs?.let { putLong("${prefix}ttft_ms", it) }
+        usage.ttftSteps?.let { putInt("${prefix}ttft_steps", it) }
+        usage.decodeMs?.let { putLong("${prefix}decode_ms", it) }
+        usage.decodeTokens?.let { putInt("${prefix}decode_tokens", it) }
     }
 
-    private fun Bundle.getTokenUsage(): AgentTokenUsage =
+    private fun Bundle.getTokenUsage(prefix: String = "usage_"): AgentTokenUsage =
         AgentTokenUsage(
-            contextTokens = optionalInt("usage_context"),
-            inputTokens = optionalInt("usage_input"),
-            outputTokens = optionalInt("usage_output"),
-            reasoningTokens = optionalInt("usage_reasoning"),
-            cachedTokens = optionalInt("usage_cache"),
-            stepCount = optionalInt("usage_steps"),
-            llmMs = optionalLong("usage_llm_ms"),
-            toolMs = optionalLong("usage_tool_ms"),
-            ttftMs = optionalLong("usage_ttft_ms"),
-            ttftSteps = optionalInt("usage_ttft_steps"),
-            decodeMs = optionalLong("usage_decode_ms"),
-            decodeTokens = optionalInt("usage_decode_tokens"),
+            contextTokens = optionalInt("${prefix}context"),
+            inputTokens = optionalInt("${prefix}input"),
+            outputTokens = optionalInt("${prefix}output"),
+            reasoningTokens = optionalInt("${prefix}reasoning"),
+            cachedTokens = optionalInt("${prefix}cache"),
+            cacheWriteTokens = optionalInt("${prefix}cache_write"),
+            requestKind = getString("${prefix}request_kind")?.takeIf { it.isNotBlank() },
+            stepCount = optionalInt("${prefix}steps"),
+            llmMs = optionalLong("${prefix}llm_ms"),
+            toolMs = optionalLong("${prefix}tool_ms"),
+            ttftMs = optionalLong("${prefix}ttft_ms"),
+            ttftSteps = optionalInt("${prefix}ttft_steps"),
+            decodeMs = optionalLong("${prefix}decode_ms"),
+            decodeTokens = optionalInt("${prefix}decode_tokens"),
         )
 
     private fun decodeCustomHeaders(raw: String?): List<CustomHeader> =

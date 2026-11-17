@@ -27,9 +27,11 @@ internal class AgentRunMessageProjector(
         runId: String,
         event: AgentEvent,
         messages: List<AgentChatMessageUi>,
+        replayEpochMs: Long? = null,
     ): List<AgentChatMessageUi> = when (event) {
         is AgentEvent.GuiControlChanged -> messages
-        is AgentEvent.AssistantBlockStart -> startAssistantBlock(runId, event, messages)
+        is AgentEvent.AssistantBlockStart ->
+            startAssistantBlock(runId, event, messages, replayEpochMs = replayEpochMs)
         is AgentEvent.AssistantBlockDelta -> when (event.kind) {
             AgentEvent.AssistantBlockKind.TEXT ->
                 appendTextDelta(runId, event.round, event.index, event.delta, messages)
@@ -41,7 +43,14 @@ internal class AgentRunMessageProjector(
             AgentEvent.AssistantBlockKind.TEXT ->
                 finalizeTextBlock(runId, event.round, event.index, event.replacementContent, messages)
             AgentEvent.AssistantBlockKind.THINKING ->
-                finalizeThinkingBlock(runId, event.round, event.index, event.replacementContent, messages)
+                finalizeThinkingBlock(
+                    runId = runId,
+                    round = event.round,
+                    index = event.index,
+                    replacementContent = event.replacementContent,
+                    messages = messages,
+                    elapsedMs = event.elapsedMs,
+                )
             AgentEvent.AssistantBlockKind.TOOL_CALL -> messages
         }
         is AgentEvent.SearchSuggestions -> attachSearchSuggestions(runId, event, messages)
@@ -56,9 +65,16 @@ internal class AgentRunMessageProjector(
         is AgentEvent.ContextCompaction -> {
             val id = "assistant-$runId-compaction-${event.operationId}"
             messages.filterNot { it.id == id } + SystemNoticeMessageUi(
-                id = id, code = SystemNoticeCode.ContextCompaction, detail = event.displayMessage,
+                id = id,
+                code = SystemNoticeCode.ContextCompaction,
+                detail = event.displayMessage,
                 contextTokens = event.tokensAfter,
                 running = event.phase == AgentEvent.ContextCompaction.PHASE_STARTED,
+                usage = event.usage?.takeUnless { it.isEmpty }?.toUi()?.copy(
+                    requestKind = AgentTokenUsage.REQUEST_KIND_COMPACTION,
+                ),
+                archiveId = event.archiveId,
+                tokensBefore = event.tokensBefore,
             )
         }
         is AgentEvent.ModelRetryScheduled -> scheduleModelRetry(runId, event, messages)
@@ -182,13 +198,23 @@ internal class AgentRunMessageProjector(
         runId: String,
         event: AgentEvent.AssistantBlockStart,
         messages: List<AgentChatMessageUi>,
-    ): List<AgentChatMessageUi> = transitionVisibleBlock(
-        runId = runId,
-        round = event.round,
-        kind = event.kind,
-        index = event.index,
-        messages = messages,
-    )
+        replayEpochMs: Long? = null,
+    ): List<AgentChatMessageUi> {
+        if (event.kind == AgentEvent.AssistantBlockKind.THINKING) {
+            recordThinkingStart(
+                thinkingId = thinkingMessageId(runId, event.round, event.index),
+                startedAtEpochMs = event.startedAtEpochMs,
+                replayEpochMs = replayEpochMs,
+            )
+        }
+        return transitionVisibleBlock(
+            runId = runId,
+            round = event.round,
+            kind = event.kind,
+            index = event.index,
+            messages = messages,
+        )
+    }
 
     fun appendTextDelta(
         runId: String,
@@ -294,20 +320,24 @@ internal class AgentRunMessageProjector(
                 id = thinkingId,
                 content = content,
                 isStreaming = false,
-                elapsedSeconds = elapsedSeconds(thinkingId),
+                elapsedSeconds = 0,
                 collapsed = true,
             )
         )
     }
 
-    fun finalizeThinking(runId: String, messages: List<AgentChatMessageUi>): List<AgentChatMessageUi> =
-        messages.map { message ->
-            if (message is ThinkingMessageUi && message.id.startsWith("$runId-thinking-")) {
+    fun finalizeThinking(runId: String, messages: List<AgentChatMessageUi>): List<AgentChatMessageUi> {
+        if (messages.none { it is ThinkingMessageUi && it.isStreaming && it.id.startsWith("$runId-thinking-") }) {
+            return messages
+        }
+        return messages.map { message ->
+            if (message is ThinkingMessageUi && message.isStreaming && message.id.startsWith("$runId-thinking-")) {
                 message.finished()
             } else {
                 message
             }
         }
+    }
 
     /** 终态不依赖各块结束事件全部到齐；缺少工具结果时只能标为未知，不能推断执行成功。 */
     fun finalizeRun(runId: String, messages: List<AgentChatMessageUi>): List<AgentChatMessageUi> =
@@ -328,8 +358,11 @@ internal class AgentRunMessageProjector(
         round: Int,
         messages: List<AgentChatMessageUi>,
     ): List<AgentChatMessageUi> {
+        if (messages.none { it is ThinkingMessageUi && it.isStreaming && isThinkingMessageForRound(it.id, runId, round) }) {
+            return messages
+        }
         return messages.map { message ->
-            if (message is ThinkingMessageUi && isThinkingMessageForRound(message.id, runId, round)) {
+            if (message is ThinkingMessageUi && message.isStreaming && isThinkingMessageForRound(message.id, runId, round)) {
                 message.finished()
             } else {
                 message
@@ -343,15 +376,33 @@ internal class AgentRunMessageProjector(
         index: Int,
         replacementContent: String?,
         messages: List<AgentChatMessageUi>,
+        elapsedMs: Long? = null,
     ): List<AgentChatMessageUi> {
         val thinkingId = thinkingMessageId(runId, round, index)
-        return messages.map { message ->
+        var changed = false
+        val next = messages.map { message ->
             if (message is ThinkingMessageUi && message.id == thinkingId) {
-                message.finished(replacementContent)
+                val updated = if (message.isStreaming) {
+                    message.finished(replacementContent, elapsedMs)
+                } else {
+                    thinkingStartedAt.remove(thinkingId)
+                    val nextContent = replacementContent ?: message.content
+                    val nextElapsed = elapsedMs
+                        ?.let { (it / 1000L).toInt().coerceAtLeast(0) }
+                        ?: message.elapsedSeconds
+                    if (nextContent != message.content || nextElapsed != message.elapsedSeconds) {
+                        message.copy(content = nextContent, elapsedSeconds = nextElapsed)
+                    } else {
+                        message
+                    }
+                }
+                if (updated !== message) changed = true
+                updated
             } else {
                 message
             }
         }
+        return if (changed) next else messages
     }
 
     fun finalizeText(
@@ -549,15 +600,41 @@ internal class AgentRunMessageProjector(
         thinkingStartedAt.keys.removeAll { it.startsWith("$runId-thinking-") }
     }
 
-    private fun ThinkingMessageUi.finished(authoritativeContent: String? = null): ThinkingMessageUi =
-        copy(
+    private fun ThinkingMessageUi.finished(
+        authoritativeContent: String? = null,
+        authoritativeElapsedMs: Long? = null,
+    ): ThinkingMessageUi {
+        val startedAt = thinkingStartedAt.remove(id)
+        val settledElapsedSeconds = authoritativeElapsedMs
+            ?.let { (it / 1000L).toInt().coerceAtLeast(0) }
+            ?: if (isStreaming) {
+                startedAt?.let {
+                    ((nowElapsedRealtime() - it) / 1000L).toInt().coerceAtLeast(0)
+                } ?: elapsedSeconds
+            } else {
+                elapsedSeconds
+            }
+        return copy(
             content = authoritativeContent ?: content,
             isStreaming = false,
-            elapsedSeconds = thinkingStartedAt[id]?.let { startedAt ->
-                ((nowElapsedRealtime() - startedAt) / 1000).toInt().coerceAtLeast(0)
-            } ?: elapsedSeconds,
+            elapsedSeconds = settledElapsedSeconds,
             collapsed = true,
         )
+    }
+
+    private fun recordThinkingStart(
+        thinkingId: String,
+        startedAtEpochMs: Long?,
+        replayEpochMs: Long?,
+    ) {
+        val nowElapsed = nowElapsedRealtime()
+        val startedElapsed = if (replayEpochMs != null && startedAtEpochMs != null) {
+            nowElapsed - (replayEpochMs - startedAtEpochMs).coerceAtLeast(0L)
+        } else {
+            nowElapsed
+        }
+        thinkingStartedAt.putIfAbsent(thinkingId, startedElapsed)
+    }
 
     private fun elapsedSeconds(thinkingId: String): Int {
         val startedAt = thinkingStartedAt.getOrPut(thinkingId, nowElapsedRealtime)
@@ -770,6 +847,8 @@ internal fun AgentTokenUsage.toUi(): TokenUsageUi =
         outputTokens = outputTokens,
         reasoningTokens = reasoningTokens,
         cachedTokens = cachedTokens,
+        cacheWriteTokens = cacheWriteTokens,
+        requestKind = requestKind,
         stepCount = stepCount,
         llmMs = llmMs,
         toolMs = toolMs,

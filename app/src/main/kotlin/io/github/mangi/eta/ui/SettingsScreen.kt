@@ -14,12 +14,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.MenuBook
 import androidx.compose.material.icons.rounded.AccessibilityNew
 import androidx.compose.material.icons.rounded.AccountTree
+import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.BrightnessHigh
 import androidx.compose.material.icons.rounded.BugReport
+import androidx.compose.material.icons.rounded.ChatBubble
 import androidx.compose.material.icons.rounded.Cloud
 import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.Dashboard
 import androidx.compose.material.icons.rounded.Description
-import androidx.compose.material.icons.rounded.FilterAlt
 import androidx.compose.material.icons.rounded.GppMaybe
 import androidx.compose.material.icons.rounded.Hearing
 import androidx.compose.material.icons.rounded.Hub
@@ -45,6 +47,7 @@ import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material.icons.rounded.TouchApp
 import androidx.compose.material.icons.rounded.TravelExplore
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.VerifiedUser
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.runtime.Composable
@@ -76,6 +79,8 @@ import io.github.mangi.eta.agent.accessibility.AgentAccessibilityService
 import io.github.mangi.eta.config.PowerAssistantTarget
 import io.github.mangi.eta.config.Prefs
 import io.github.mangi.eta.data.model.AppearanceUiStyle
+import io.github.mangi.eta.data.model.ReasoningEffort
+import io.github.mangi.eta.data.model.enabledModel
 import io.github.mangi.eta.data.repository.ProviderRepository
 import io.github.mangi.eta.data.repository.RuntimeConfigRepository
 import io.github.mangi.eta.data.update.AppLatestRelease
@@ -99,6 +104,7 @@ import io.github.mangi.eta.ui.components.coui.CouiPreference
 import io.github.mangi.eta.ui.components.coui.CouiScaffoldPage
 import io.github.mangi.eta.ui.components.coui.CouiSettingsIcon
 import io.github.mangi.eta.ui.components.coui.CouiSwitchPreference
+import io.github.mangi.eta.ui.model.AgentModelPickerProjector
 import io.github.mangi.eta.ui.navigation.AppRoute
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -135,7 +141,6 @@ private fun SettingsGroupCard(content: @Composable () -> Unit) {
 @Composable
 private fun SettingsIcon(
     icon: ImageVector,
-    tint: Color,
     enabled: Boolean = true,
 ) {
     val glyphSize = when (icon) {
@@ -152,7 +157,11 @@ private fun SettingsIcon(
             imageVector = icon,
             contentDescription = null,
             modifier = Modifier.size(glyphSize),
-            tint = if (enabled) tint else MiuixTheme.colorScheme.disabledOnSecondaryVariant,
+            tint = if (enabled) {
+                MiuixTheme.colorScheme.onBackground
+            } else {
+                MiuixTheme.colorScheme.disabledOnSecondaryVariant
+            },
         )
     }
 }
@@ -275,6 +284,81 @@ private fun SettingsPageContent(
     // LSPosed 数据库）；未就绪时保持 null，UI 禁止修改。
     var prefs by remember { mutableStateOf(Prefs.remotePreferencesForUi(EtaApp.serviceInstance)) }
     val agentPrefs = remember { Prefs.localAgentPreferences() }
+    val pickerState = remember(providers, selectedProviderId, selectedModelId) {
+        AgentModelPickerProjector.project(providers, selectedProviderId, selectedModelId)
+    }
+    val effectivePrimary = remember(providers, pickerState.selectedModel?.id) {
+        providers.enabledModel(pickerState.selectedModel?.id)
+    }
+    val effectiveCapabilities = remember(effectivePrimary) {
+        effectivePrimary?.let { (provider, model) ->
+            RuntimeConfigRepository.reasoningCapabilities(provider, model)
+        }
+    }
+    val effortOptions = remember(effectiveCapabilities) {
+        effectiveCapabilities?.selectableEfforts
+            ?.filter { it != ReasoningEffort.OFF }
+            .orEmpty()
+    }
+    val providerDefaultLabel = stringResource(R.string.conversation_title_settings_reasoning_provider_default)
+    val effortLabels = remember(effortOptions, providerDefaultLabel) {
+        effortOptions.map { effort ->
+            when (effort) {
+                ReasoningEffort.DEFAULT -> providerDefaultLabel
+                else -> effort.displayName
+            }
+        }
+    }
+    val defaultThinkingKey = Prefs.Keys.AGENT_THINKING_ENABLED
+    val defaultThinkingFallback = Prefs.Keys.BOOLEAN_DEFAULTS.getValue(defaultThinkingKey)
+    var defaultThinkingEnabled by remember(agentPrefs) {
+        mutableStateOf(
+            agentPrefs?.getBoolean(defaultThinkingKey, defaultThinkingFallback)
+                ?: enhancementHistory.checked(defaultThinkingKey, defaultThinkingFallback),
+        )
+    }
+    var savedDefaultEffort by remember(agentPrefs) {
+        mutableStateOf(Prefs.defaultReasoningEffort(agentPrefs))
+    }
+    DisposableEffect(agentPrefs) {
+        val targetPrefs = agentPrefs ?: return@DisposableEffect onDispose {}
+        val listener = SharedPreferences.OnSharedPreferenceChangeListener { changedPrefs, key ->
+            when (key) {
+                defaultThinkingKey -> {
+                    defaultThinkingEnabled = changedPrefs.getBoolean(defaultThinkingKey, defaultThinkingFallback)
+                }
+                Prefs.Keys.AGENT_DEFAULT_REASONING_EFFORT -> {
+                    savedDefaultEffort = Prefs.defaultReasoningEffort(changedPrefs)
+                }
+            }
+        }
+        targetPrefs.registerOnSharedPreferenceChangeListener(listener)
+        onDispose { targetPrefs.unregisterOnSharedPreferenceChangeListener(listener) }
+    }
+    val effectiveSelectedEffort = remember(effectiveCapabilities, savedDefaultEffort) {
+        effectiveCapabilities?.normalize(savedDefaultEffort) ?: ReasoningEffort.DEFAULT
+    }
+    val selectedEffortIndex = remember(effortOptions, effectiveSelectedEffort) {
+        effortOptions.indexOf(effectiveSelectedEffort).takeIf { it >= 0 } ?: 0
+    }
+    val onDefaultEffortSelect: (Int) -> Unit = { index ->
+        val chosen = effortOptions.getOrNull(index)
+        val targetPrefs = agentPrefs
+        if (chosen != null && targetPrefs != null) {
+            if (putStringSync(targetPrefs, Prefs.Keys.AGENT_DEFAULT_REASONING_EFFORT, chosen.wireValue)) {
+                savedDefaultEffort = chosen
+            } else {
+                Toast.makeText(
+                    context.applicationContext,
+                    context.getString(R.string.settings_write_failed),
+                    Toast.LENGTH_SHORT,
+                ).show()
+            }
+        }
+    }
+    val defaultEffortTitle = stringResource(R.string.settings_default_reasoning_effort)
+    val defaultEffortUnsupported = stringResource(R.string.conversation_title_settings_reasoning_unsupported)
+    val defaultEffortEnabled = agentPrefs != null && defaultThinkingEnabled && effortOptions.size > 1
     var powerAssistantTarget by remember(prefs) {
         mutableStateOf(prefs?.let(Prefs::powerAssistantTarget) ?: enhancementHistory.powerTarget())
     }
@@ -384,6 +468,37 @@ private fun SettingsPageContent(
                         icon = Icons.Rounded.Psychology,
                         iconTint = SettingsIconColors.Blue,
                     )
+                    CouiIconDivider()
+                    if (effortOptions.size > 1) {
+                        CouiDropdownPreference(
+                            title = defaultEffortTitle,
+                            items = effortLabels,
+                            selectedIndex = selectedEffortIndex,
+                            onSelectedIndexChange = onDefaultEffortSelect,
+                            icon = {
+                                CouiSettingsIcon(
+                                    icon = Icons.Rounded.Tune,
+                                    tint = SettingsIconColors.Blue,
+                                    enabled = defaultEffortEnabled,
+                                )
+                            },
+                            enabled = defaultEffortEnabled,
+                        )
+                    } else {
+                        CouiPreference(
+                            title = defaultEffortTitle,
+                            summary = defaultEffortUnsupported,
+                            icon = {
+                                CouiSettingsIcon(
+                                    icon = Icons.Rounded.Tune,
+                                    tint = SettingsIconColors.Blue,
+                                    enabled = false,
+                                )
+                            },
+                            enabled = false,
+                            showChevron = false,
+                        )
+                    }
                 }
 
                 Group(title = stringResource(R.string.settings_context_extensions)) {
@@ -394,6 +509,12 @@ private fun SettingsPageContent(
                         key = Prefs.Keys.AGENT_AUTO_COMPACTION_ENABLED,
                         icon = Icons.Rounded.Layers,
                         iconTint = SettingsIconColors.Blue,
+                    )
+                    CouiIconDivider()
+                    CouiPreference(
+                        title = stringResource(R.string.conversation_title_settings_title),
+                        icon = { CouiSettingsIcon(Icons.Rounded.AutoAwesome, SettingsIconColors.Blue) },
+                        onClick = { onNavigate(AppRoute.ConversationTitleSettings) },
                     )
                     CouiIconDivider()
                     CouiPreference(
@@ -505,6 +626,17 @@ private fun SettingsPageContent(
                         },
                         onClick = openAssistantSettings,
                     )
+                    CouiIconDivider()
+                    CouiPreference(
+                        title = stringResource(R.string.assistant_overlay_settings_title),
+                        icon = {
+                            CouiSettingsIcon(
+                                Icons.Rounded.ChatBubble,
+                                SettingsIconColors.Blue,
+                            )
+                        },
+                        onClick = { onNavigate(AppRoute.AssistantOverlaySettings) },
+                    )
                     if (prefs != null || hasConnectedFramework) {
                         CouiIconDivider()
                         CouiDropdownPreference(
@@ -529,28 +661,6 @@ private fun SettingsPageContent(
                             key = Prefs.Keys.ASSISTANT_AUTO_CONFIG,
                             icon = Icons.Rounded.Settings,
                             iconTint = SettingsIconColors.Green,
-                        )
-                    }
-                }
-
-                if (prefs != null || hasConnectedFramework) {
-                    Group(title = stringResource(R.string.ui_xiaobu_xiaoai_compatible_entrance_ae918a)) {
-                        SwitchPref(
-                            context = context,
-                            prefs = prefs,
-                            title = stringResource(R.string.ui_enable_vendor_assistant_custom_models_c8e465),
-                            key = Prefs.Keys.AGENT_CUSTOM_MODEL,
-                            icon = Icons.Rounded.Cloud,
-                            iconTint = SettingsIconColors.Blue,
-                        )
-                        CouiIconDivider()
-                        SwitchPref(
-                            context = context,
-                            prefs = prefs,
-                            title = stringResource(R.string.ui_only_take_over_with_agent_prefix_d17556),
-                            key = Prefs.Keys.AGENT_REQUIRE_PREFIX,
-                            icon = Icons.Rounded.FilterAlt,
-                            iconTint = SettingsIconColors.Blue,
                         )
                     }
                 }
@@ -636,6 +746,15 @@ private fun SettingsPageContent(
                 }
 
                 Group(title = stringResource(R.string.settings_general)) {
+                    SwitchPref(
+                        context = context,
+                        prefs = agentPrefs,
+                        title = stringResource(R.string.settings_keep_screen_on),
+                        key = Prefs.Keys.AGENT_KEEP_SCREEN_ON_ENABLED,
+                        icon = Icons.Rounded.BrightnessHigh,
+                        iconTint = SettingsIconColors.Orange,
+                    )
+                    CouiIconDivider()
                     CouiPreference(
                         title = stringResource(R.string.appearance_title),
                         icon = { CouiSettingsIcon(Icons.Rounded.Palette, SettingsIconColors.Orange) },
@@ -786,12 +905,7 @@ private fun SettingsPageContent(
                         ArrowPreference(
                             title = stringResource(R.string.ui_model_provider_e8c7f5),
                             summary = providerSummary,
-                            startAction = {
-                                SettingsIcon(
-                                    icon = Icons.Rounded.Cloud,
-                                    tint = SettingsIconColors.Blue,
-                                )
-                            },
+                            startAction = { SettingsIcon(Icons.Rounded.Cloud) },
                             onClick = { onNavigate(AppRoute.ModelProviders) },
                         )
                         SwitchPref(
@@ -800,8 +914,34 @@ private fun SettingsPageContent(
                             title = stringResource(R.string.ui_deep_thinking_enabled_by_default_c032d6),
                             key = Prefs.Keys.AGENT_THINKING_ENABLED,
                             icon = Icons.Rounded.Psychology,
-                            iconTint = SettingsIconColors.Blue,
                         )
+                        if (effortOptions.size > 1) {
+                            OverlayDropdownPreference(
+                                title = defaultEffortTitle,
+                                items = effortLabels,
+                                selectedIndex = selectedEffortIndex,
+                                enabled = defaultEffortEnabled,
+                                onSelectedIndexChange = onDefaultEffortSelect,
+                                startAction = {
+                                    SettingsIcon(
+                                        icon = Icons.Rounded.Tune,
+                                        enabled = defaultEffortEnabled,
+                                    )
+                                },
+                            )
+                        } else {
+                            BasicComponent(
+                                title = defaultEffortTitle,
+                                summary = defaultEffortUnsupported,
+                                startAction = {
+                                    SettingsIcon(
+                                        icon = Icons.Rounded.Tune,
+                                        enabled = false,
+                                    )
+                                },
+                                enabled = false,
+                            )
+                        }
                     }
                 }
 
@@ -814,56 +954,35 @@ private fun SettingsPageContent(
                             title = stringResource(R.string.settings_auto_compaction),
                             key = Prefs.Keys.AGENT_AUTO_COMPACTION_ENABLED,
                             icon = Icons.Rounded.Layers,
-                            iconTint = SettingsIconColors.Blue,
+                        )
+                        ArrowPreference(
+                            title = stringResource(R.string.conversation_title_settings_title),
+                            startAction = { SettingsIcon(Icons.Rounded.AutoAwesome) },
+                            onClick = { onNavigate(AppRoute.ConversationTitleSettings) },
                         )
                         ArrowPreference(
                             title = stringResource(R.string.ui_memory_b55ff5),
-                            startAction = {
-                                SettingsIcon(
-                                    icon = Icons.AutoMirrored.Rounded.MenuBook,
-                                    tint = SettingsIconColors.Orange,
-                                )
-                            },
+                            startAction = { SettingsIcon(Icons.AutoMirrored.Rounded.MenuBook) },
                             onClick = { onNavigate(AppRoute.Memory) },
                         )
                         ArrowPreference(
                             title = "Subagent",
-                            startAction = {
-                                SettingsIcon(
-                                    icon = Icons.Rounded.Hub,
-                                    tint = SettingsIconColors.Blue,
-                                )
-                            },
+                            startAction = { SettingsIcon(Icons.Rounded.Hub) },
                             onClick = { onNavigate(AppRoute.Subagents) },
                         )
                         ArrowPreference(
                             title = stringResource(R.string.route_skills),
-                            startAction = {
-                                SettingsIcon(
-                                    icon = Icons.Rounded.ImportContacts,
-                                    tint = SettingsIconColors.Green,
-                                )
-                            },
+                            startAction = { SettingsIcon(Icons.Rounded.ImportContacts) },
                             onClick = { onNavigate(AppRoute.Skills) },
                         )
                         ArrowPreference(
                             title = stringResource(R.string.route_mcp_servers),
-                            startAction = {
-                                SettingsIcon(
-                                    icon = Icons.Rounded.AccountTree,
-                                    tint = SettingsIconColors.Blue,
-                                )
-                            },
+                            startAction = { SettingsIcon(Icons.Rounded.AccountTree) },
                             onClick = { onNavigate(AppRoute.McpServers) },
                         )
                         ArrowPreference(
                             title = "角色",
-                            startAction = {
-                                SettingsIcon(
-                                    icon = Icons.Rounded.SportsBar,
-                                    tint = SettingsIconColors.Orange,
-                                )
-                            },
+                            startAction = { SettingsIcon(Icons.Rounded.SportsBar) },
                             onClick = { onNavigate(AppRoute.Characters) },
                         )
                     }
@@ -874,17 +993,12 @@ private fun SettingsPageContent(
                     SettingsGroupCard {
                         ArrowPreference(
                             title = stringResource(R.string.settings_tools_list),
-                            startAction = { SettingsIcon(Icons.Rounded.Dashboard, tint = SettingsIconColors.Green) },
+                            startAction = { SettingsIcon(Icons.Rounded.Dashboard) },
                             onClick = { onNavigate(AppRoute.Tools) },
                         )
                         ArrowPreference(
                             title = stringResource(R.string.web_tools_settings_title),
-                            startAction = {
-                                SettingsIcon(
-                                    icon = Icons.Rounded.TravelExplore,
-                                    tint = SettingsIconColors.Blue,
-                                )
-                            },
+                            startAction = { SettingsIcon(Icons.Rounded.TravelExplore) },
                             onClick = { onNavigate(AppRoute.WebToolsSettings) },
                         )
                         SwitchPref(
@@ -893,16 +1007,10 @@ private fun SettingsPageContent(
                             title = stringResource(R.string.settings_virtual_display_title),
                             key = Prefs.Keys.AGENT_VIRTUAL_DISPLAY_ENABLED,
                             icon = Icons.Rounded.Layers,
-                            iconTint = SettingsIconColors.Blue,
                         )
                         ArrowPreference(
                             title = stringResource(R.string.ui_linux_tool_environment_314d22),
-                            startAction = {
-                                SettingsIcon(
-                                    icon = Icons.Rounded.Inventory2,
-                                    tint = SettingsIconColors.Orange,
-                                )
-                            },
+                            startAction = { SettingsIcon(Icons.Rounded.Inventory2) },
                             onClick = { onNavigate(AppRoute.LinuxEnvironment) },
                         )
                     }
@@ -912,7 +1020,7 @@ private fun SettingsPageContent(
                     SettingsGroupCard {
                         ArrowPreference(
                             title = stringResource(R.string.capability_enhancements),
-                            startAction = { SettingsIcon(Icons.Rounded.Security, tint = SettingsIconColors.Blue) },
+                            startAction = { SettingsIcon(Icons.Rounded.Security) },
                             onClick = { onNavigate(AppRoute.SystemEnhance) },
                         )
                     }
@@ -923,13 +1031,13 @@ private fun SettingsPageContent(
                     SettingsGroupCard {
                         ArrowPreference(
                             title = stringResource(R.string.ui_eta_system_assistant_003e9b),
-                            startAction = {
-                                SettingsIcon(
-                                    icon = Icons.Rounded.SupportAgent,
-                                    tint = SettingsIconColors.Green,
-                                )
-                            },
+                            startAction = { SettingsIcon(Icons.Rounded.SupportAgent) },
                             onClick = openAssistantSettings,
+                        )
+                        ArrowPreference(
+                            title = stringResource(R.string.assistant_overlay_settings_title),
+                            startAction = { SettingsIcon(Icons.Rounded.ChatBubble) },
+                            onClick = { onNavigate(AppRoute.AssistantOverlaySettings) },
                         )
                         if (prefs != null || hasConnectedFramework) {
                             OverlayDropdownPreference(
@@ -940,7 +1048,6 @@ private fun SettingsPageContent(
                                 startAction = {
                                     SettingsIcon(
                                         icon = Icons.Rounded.PowerSettingsNew,
-                                        tint = SettingsIconColors.Yellow,
                                         enabled = prefs != null,
                                     )
                                 },
@@ -952,31 +1059,6 @@ private fun SettingsPageContent(
                                 title = stringResource(R.string.ui_automatically_set_default_assistant_f86963),
                                 key = Prefs.Keys.ASSISTANT_AUTO_CONFIG,
                                 icon = Icons.Rounded.Settings,
-                                iconTint = SettingsIconColors.Green,
-                            )
-                        }
-                    }
-                }
-
-                if (prefs != null || hasConnectedFramework) {
-                    item(key = "section_oem_assistant_compatibility") {
-                        SmallTitle(stringResource(R.string.ui_xiaobu_xiaoai_compatible_entrance_ae918a))
-                        SettingsGroupCard {
-                            SwitchPref(
-                                context = context,
-                                prefs = prefs,
-                                title = stringResource(R.string.ui_enable_vendor_assistant_custom_models_c8e465),
-                                key = Prefs.Keys.AGENT_CUSTOM_MODEL,
-                                icon = Icons.Rounded.Cloud,
-                                iconTint = SettingsIconColors.Blue,
-                            )
-                            SwitchPref(
-                                context = context,
-                                prefs = prefs,
-                                title = stringResource(R.string.ui_only_take_over_with_agent_prefix_d17556),
-                                key = Prefs.Keys.AGENT_REQUIRE_PREFIX,
-                                icon = Icons.Rounded.FilterAlt,
-                                iconTint = SettingsIconColors.Blue,
                             )
                         }
                     }
@@ -993,7 +1075,6 @@ private fun SettingsPageContent(
                                     title = stringResource(R.string.ui_maintain_hey_google_detection_after_screen_rest_9d6877),
                                     key = Prefs.Keys.HOTWORD_SELF_HEAL,
                                     icon = Icons.Rounded.Hearing,
-                                    iconTint = SettingsIconColors.Green,
                                 )
                                 SwitchPref(
                                     context = context,
@@ -1001,7 +1082,6 @@ private fun SettingsPageContent(
                                     title = stringResource(R.string.ui_lock_screen_evokes_automatic_voice_input_1cde18),
                                     key = Prefs.Keys.LOCKSCREEN_VOICE_COMMAND,
                                     icon = Icons.Rounded.Lock,
-                                    iconTint = SettingsIconColors.Blue,
                                 )
                                 SwitchPref(
                                     context = context,
@@ -1009,7 +1089,6 @@ private fun SettingsPageContent(
                                     title = stringResource(R.string.ui_bright_screen_evokes_automatic_voice_input_4358fe),
                                     key = Prefs.Keys.SCREEN_ON_VOICE_COMMAND,
                                     icon = Icons.Rounded.SettingsVoice,
-                                    iconTint = SettingsIconColors.Green,
                                 )
                             }
                             if (capabilities.root.isGranted || hasUsedSystemizer) {
@@ -1018,7 +1097,6 @@ private fun SettingsPageContent(
                                     startAction = {
                                         SettingsIcon(
                                             icon = Icons.Rounded.Inventory,
-                                            tint = SettingsIconColors.Orange,
                                             enabled = !installingSystemizer,
                                         )
                                     },
@@ -1048,7 +1126,6 @@ private fun SettingsPageContent(
                                 title = stringResource(R.string.ui_long_press_on_the_gesture_bar_triggers_a_circle_to_s_b80117),
                                 key = Prefs.Keys.GESTURE_BAR_CIRCLE_TO_SEARCH,
                                 icon = Icons.Rounded.SwipeUp,
-                                iconTint = SettingsIconColors.Blue,
                             )
                             SwitchPref(
                                 context = context,
@@ -1056,7 +1133,6 @@ private fun SettingsPageContent(
                                 title = stringResource(R.string.ui_long_press_with_two_fingers_to_trigger_a_circle_sear_ab597a),
                                 key = Prefs.Keys.DOUBLE_FINGER_CIRCLE_TO_SEARCH,
                                 icon = Icons.Rounded.TouchApp,
-                                iconTint = SettingsIconColors.Blue,
                             )
                         }
                     }
@@ -1065,38 +1141,29 @@ private fun SettingsPageContent(
                 item(key = "section_general") {
                     SmallTitle(stringResource(R.string.settings_general))
                     SettingsGroupCard {
+                        SwitchPref(
+                            context = context,
+                            prefs = agentPrefs,
+                            title = stringResource(R.string.settings_keep_screen_on),
+                            key = Prefs.Keys.AGENT_KEEP_SCREEN_ON_ENABLED,
+                            icon = Icons.Rounded.BrightnessHigh,
+                        )
                         ArrowPreference(
                             title = stringResource(R.string.appearance_title),
-                            startAction = {
-                                SettingsIcon(
-                                    icon = Icons.Rounded.Palette,
-                                    tint = SettingsIconColors.Orange,
-                                )
-                            },
+                            startAction = { SettingsIcon(Icons.Rounded.Palette) },
                             onClick = { onNavigate(AppRoute.AppearanceSettings) },
                         )
                         ArrowPreference(
                             title = stringResource(R.string.speech_settings_title),
-                            startAction = { SettingsIcon(icon = Icons.Rounded.Mic, tint = SettingsIconColors.Blue) },
+                            startAction = { SettingsIcon(Icons.Rounded.Mic) },
                             onClick = { onNavigate(AppRoute.SpeechSettings) },
                         )
                         LanguagePreference(
-                            iconTint = SettingsIconColors.Blue,
-                            startAction = {
-                                SettingsIcon(
-                                    icon = Icons.Rounded.Language,
-                                    tint = SettingsIconColors.Blue,
-                                )
-                            },
+                            startAction = { SettingsIcon(Icons.Rounded.Language) },
                         )
                         ArrowPreference(
                             title = stringResource(R.string.data_backup_title),
-                            startAction = {
-                                SettingsIcon(
-                                    icon = Icons.Rounded.Description,
-                                    tint = SettingsIconColors.Blue,
-                                )
-                            },
+                            startAction = { SettingsIcon(Icons.Rounded.Description) },
                             onClick = { onNavigate(AppRoute.DataBackup) },
                         )
                     }
@@ -1107,12 +1174,7 @@ private fun SettingsPageContent(
                     SettingsGroupCard {
                         ArrowPreference(
                             title = stringResource(R.string.ui_floating_window_permissions_076b77),
-                            startAction = {
-                                SettingsIcon(
-                                    icon = Icons.Rounded.Layers,
-                                    tint = SettingsIconColors.Blue,
-                                )
-                            },
+                            startAction = { SettingsIcon(Icons.Rounded.Layers) },
                             endActions = {
                                 Text(
                                     text = stringResource(
@@ -1141,12 +1203,7 @@ private fun SettingsPageContent(
                         )
                         ArrowPreference(
                             title = stringResource(R.string.ui_accessibility_enhancement_tools_8fd257),
-                            startAction = {
-                                SettingsIcon(
-                                    icon = Icons.Rounded.AccessibilityNew,
-                                    tint = SettingsIconColors.Blue,
-                                )
-                            },
+                            startAction = { SettingsIcon(Icons.Rounded.AccessibilityNew) },
                             endActions = {
                                 val enabled = accessibilityGranted || AgentAccessibilityService.isAvailable()
                                 Text(
@@ -1177,7 +1234,6 @@ private fun SettingsPageContent(
                                 startAction = {
                                     SettingsIcon(
                                         icon = Icons.Rounded.VerifiedUser,
-                                        tint = SettingsIconColors.Blue,
                                         enabled = prefs != null && !accessibilityProtectionPending,
                                     )
                                 },
@@ -1193,12 +1249,7 @@ private fun SettingsPageContent(
                         BasicComponent(
                             title = stringResource(R.string.ui_about_version_title),
                             summary = appVersionSummary,
-                            startAction = {
-                                SettingsIcon(
-                                    icon = Icons.Rounded.Info,
-                                    tint = SettingsIconColors.Blue,
-                                )
-                            },
+                            startAction = { SettingsIcon(Icons.Rounded.Info) },
                         )
                         ArrowPreference(
                             title = stringResource(R.string.ui_about_update_title),
@@ -1210,7 +1261,6 @@ private fun SettingsPageContent(
                             startAction = {
                                 SettingsIcon(
                                     icon = Icons.Rounded.SystemUpdate,
-                                    tint = SettingsIconColors.Green,
                                     enabled = !checkingUpdate,
                                 )
                             },
@@ -1219,23 +1269,13 @@ private fun SettingsPageContent(
                         )
                         ArrowPreference(
                             title = stringResource(R.string.ui_about_feedback_title),
-                            startAction = {
-                                SettingsIcon(
-                                    icon = Icons.Rounded.BugReport,
-                                    tint = SettingsIconColors.Orange,
-                                )
-                            },
+                            startAction = { SettingsIcon(Icons.Rounded.BugReport) },
                             onClick = { openUrl("https://github.com/Mangi-11/Eta/issues") },
                         )
                         ArrowPreference(
                             title = stringResource(R.string.ui_about_github_star_title),
                             summary = stringResource(R.string.ui_about_github_star_hint),
-                            startAction = {
-                                SettingsIcon(
-                                    icon = Icons.Rounded.Code,
-                                    tint = SettingsIconColors.Blue,
-                                )
-                            },
+                            startAction = { SettingsIcon(Icons.Rounded.Code) },
                             onClick = { openUrl("https://github.com/Mangi-11/Eta") },
                         )
                     }
@@ -1365,7 +1405,7 @@ private fun SwitchPref(
     summary: String? = null,
     key: String,
     icon: ImageVector,
-    iconTint: Color,
+    iconTint: Color = Color.Unspecified,
 ) {
     val enabled = prefs != null
     val history = remember(context.applicationContext) { EnhancementSettingsHistory(context) }
@@ -1420,7 +1460,7 @@ private fun SwitchPref(
                 checked = checked,
                 onCheckedChange = onToggle,
                 startAction = {
-                    SettingsIcon(icon = icon, enabled = enabled, tint = iconTint)
+                    SettingsIcon(icon = icon, enabled = enabled)
                 },
                 enabled = enabled,
             )

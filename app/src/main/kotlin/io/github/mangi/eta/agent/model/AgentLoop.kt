@@ -55,15 +55,21 @@ internal class AgentLoop(
 
     private var availableToolNames = emptySet<String>()
     private val accumulatedReasoning = StringBuilder()
+    private val thinkingBlockStartMs = mutableMapOf<Pair<Int, Int>, Long>()
     private val sensitiveToolCallIds = linkedSetOf<String>()
     private val toolBatchLock = Any()
     private var pendingToolImageMessage: JSONObject? = null
     private val replyImages = linkedMapOf<String, AgentModelClient.ModelImage>()
     private val turnMetrics = TurnMetricsAccumulator()
+    private var precedingTools: JSONArray? = null
     private val context = AgentContextSession(
         config, messages, systemCount, operationId, provider, runController,
         { sensitiveToolCallIds }, onEvent, onContextSnapshot, { transcript.length() },
         roleplay = roleplayContext != null,
+        mainToolsProvider = { precedingTools ?: tools },
+        mainSessionId = sessionId,
+        messageProjector = { source -> roleplayContext?.projectMessages(source) ?: source },
+        enableCacheReuse = true,
     )
     private var supplementIndex = initialSupplementIndex
 
@@ -93,7 +99,6 @@ internal class AgentLoop(
 
     fun run(): Result {
         var round = 1
-        var precedingTools: JSONArray? = null
 
         while (true) {
             runController.throwIfCancelled()
@@ -157,9 +162,15 @@ internal class AgentLoop(
                             roundUsage = providerEvent.usage
                             roundInputTokens = providerEvent.contextInputTokens ?: roundInputTokens
                         }
+                        if (providerEvent is ProviderEvent.BlockStart &&
+                            providerEvent.kind == AssistantBlockKind.THINKING
+                        ) {
+                            thinkingBlockStartMs[attemptRound to providerEvent.index] = monotonicNowMs()
+                        }
                         if (providerEvent is ProviderEvent.BlockDelta &&
                             providerEvent.kind == AssistantBlockKind.THINKING
                         ) {
+                            thinkingBlockStartMs.putIfAbsent(attemptRound to providerEvent.index, monotonicNowMs())
                             accumulatedReasoning.append(providerEvent.delta)
                         }
                         if (providerEvent !is ProviderEvent.Usage) {
@@ -324,6 +335,7 @@ internal class AgentLoop(
     private fun steeringMessage(supplement: String): JSONObject =
         AgentConversationCodec.userTextMessage(steeringPrompt(supplement))
             .put("_eta_message_id", "user-$operationId-supplement-${++supplementIndex}")
+            .put("_eta_steering", true)
 
     private fun executeToolBatch(
         round: Int,
@@ -584,6 +596,7 @@ internal class AgentLoop(
                 index = index,
                 blockId = blockId,
                 name = name,
+                startedAtEpochMs = if (kind == AssistantBlockKind.THINKING) System.currentTimeMillis() else null,
             )
             is ProviderEvent.BlockDelta -> AgentEvent.AssistantBlockDelta(
                 round = round,
@@ -600,6 +613,12 @@ internal class AgentLoop(
                 name = name,
                 contentChars = content.length,
                 replacementContent = content.takeIf { replaceContent },
+                elapsedMs = if (kind == AssistantBlockKind.THINKING) {
+                    thinkingBlockStartMs.remove(round to index)
+                        ?.let { startedAt -> (monotonicNowMs() - startedAt).coerceAtLeast(0L) }
+                } else {
+                    null
+                },
             )
             is ProviderEvent.Usage -> AgentEvent.UsageReceived(round = round, usage = usage)
             is ProviderEvent.HostedToolStarted -> AgentEvent.HostedToolStarted(
@@ -639,6 +658,7 @@ internal class AgentLoop(
         private var outputTokens: Int? = null
         private var reasoningTokens: Int? = null
         private var cachedTokens: Int? = null
+        private var cacheWriteTokens: Int? = null
 
         fun reset() {
             stepCount = 0
@@ -653,6 +673,7 @@ internal class AgentLoop(
             outputTokens = null
             reasoningTokens = null
             cachedTokens = null
+            cacheWriteTokens = null
         }
 
         fun recordStep(
@@ -678,12 +699,15 @@ internal class AgentLoop(
             stepUsage?.outputTokens?.let { outputTokens = (outputTokens ?: 0) + it }
             stepUsage?.reasoningTokens?.let { reasoningTokens = (reasoningTokens ?: 0) + it }
             stepUsage?.cachedTokens?.let { cachedTokens = (cachedTokens ?: 0) + it }
+            stepUsage?.cacheWriteTokens?.let { cacheWriteTokens = (cacheWriteTokens ?: 0) + it }
             return AgentTokenUsage(
                 contextTokens = contextTokens,
                 inputTokens = inputTokens,
                 outputTokens = outputTokens,
                 reasoningTokens = reasoningTokens,
                 cachedTokens = cachedTokens,
+                cacheWriteTokens = cacheWriteTokens,
+                requestKind = AgentTokenUsage.REQUEST_KIND_CHAT,
                 stepCount = stepCount.takeIf { it > 0 },
                 llmMs = llmMs.takeIf { stepCount > 0 },
                 toolMs = toolMs.takeIf { it > 0L },
