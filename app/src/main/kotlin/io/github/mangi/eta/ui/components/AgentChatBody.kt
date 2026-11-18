@@ -29,10 +29,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
@@ -93,6 +94,7 @@ import io.github.mangi.eta.data.repository.ConversationBranchBoundary
 import io.github.mangi.eta.ui.model.branchMessageOutline
 import io.github.mangi.eta.ui.app.AgentConversationRevisionReducer
 import io.github.mangi.eta.ui.app.LocalUiStyle
+import io.github.mangi.eta.ui.layout.rememberFloatingBottomBarInsets
 import io.github.mangi.eta.ui.markdown.StreamingMarkdownStateCache
 import io.github.mangi.eta.ui.model.ConversationHistoryLoadState
 import io.github.mangi.eta.ui.model.AgentChatMessageUi
@@ -123,9 +125,11 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
-import top.yukonga.miuix.kmp.basic.IconButtonDefaults
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.blur.Backdrop
+import top.yukonga.miuix.kmp.glass.GlassIconButton
+import top.yukonga.miuix.kmp.glass.glassPress
 import top.yukonga.miuix.kmp.squircle.squircleBorder
 import top.yukonga.miuix.kmp.squircle.squircleSurface
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -375,6 +379,9 @@ private fun AgentChatScaffold(
     topInset: Dp,
     modifier: Modifier = Modifier,
 ) {
+    val isCoui = LocalUiStyle.current == AppearanceUiStyle.COUI
+    val chatBackdrop = if (isCoui) null else rememberGlassBackdrop()
+
     Scaffold(
         modifier = modifier.fillMaxSize(),
         containerColor = Color.Transparent,
@@ -399,6 +406,7 @@ private fun AgentChatScaffold(
                 inputSyncVersion = inputSyncVersion,
                 focusInputOnSync = focusInputOnSync,
                 messageEdit = messageEdit,
+                glassBackdrop = chatBackdrop,
                 onSubmit = onSubmit,
                 onInterruptAndSubmit = onInterruptAndSubmit,
                 onSteerQueuedMessage = onSteerQueuedMessage,
@@ -419,41 +427,47 @@ private fun AgentChatScaffold(
         },
     ) { innerPadding ->
         val bottomPadding = innerPadding.calculateBottomPadding()
-        if (!hasMessages) {
-            EmptyChatState(
-                showSuggestions = showEmptySuggestions,
-                onSuggestionClick = onSuggestionClick,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(top = topInset, bottom = bottomPadding),
-            )
-        } else {
-            AgentConversationMessages(
-                visibleMessages = visibleMessages,
-                scrollState = scrollState,
-                isStreaming = isStreaming,
-                topInset = topInset,
-                bottomInset = bottomPadding,
-                keepBottomAnchored = keepBottomAnchored,
-                onBottomAnchorChanged = onBottomAnchorChanged,
-                onSuggestionClick = onSuggestionClick,
-                onRunTraceClick = onRunTraceClick,
-                onOpenBrowser = onOpenBrowser,
-                onEditMessage = onEditMessage,
-                onDeleteMessage = onDeleteMessage,
-                onRegenerateMessage = onRegenerateMessage,
-                onBranchMessage = onBranchMessage,
-                onSelectReplyCandidate = onSelectReplyCandidate,
-                messageActionsEnabled = !isStreaming && !isCompacting && !isBranching && messageEdit == null,
-                editTargetMessageId = messageEdit?.targetMessageId,
-                currentBrowserMessageId = currentBrowserMessageId,
-                hasEarlierMessages = hasEarlierMessages,
-                messageStartIndex = messageStartIndex,
-                historyLoadState = historyLoadState,
-                onLoadEarlierMessages = onLoadEarlierMessages,
-                onHistoryViewportChanged = onHistoryViewportChanged,
-                modifier = Modifier.fillMaxSize(),
-            )
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .captureGlassBackdrop(chatBackdrop),
+        ) {
+            if (!hasMessages) {
+                EmptyChatState(
+                    showSuggestions = showEmptySuggestions,
+                    onSuggestionClick = onSuggestionClick,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(top = topInset, bottom = bottomPadding),
+                )
+            } else {
+                AgentConversationMessages(
+                    visibleMessages = visibleMessages,
+                    scrollState = scrollState,
+                    isStreaming = isStreaming,
+                    topInset = topInset,
+                    bottomInset = bottomPadding,
+                    keepBottomAnchored = keepBottomAnchored,
+                    onBottomAnchorChanged = onBottomAnchorChanged,
+                    onSuggestionClick = onSuggestionClick,
+                    onRunTraceClick = onRunTraceClick,
+                    onOpenBrowser = onOpenBrowser,
+                    onEditMessage = onEditMessage,
+                    onDeleteMessage = onDeleteMessage,
+                    onRegenerateMessage = onRegenerateMessage,
+                    onBranchMessage = onBranchMessage,
+                    onSelectReplyCandidate = onSelectReplyCandidate,
+                    messageActionsEnabled = !isStreaming && !isCompacting && !isBranching && messageEdit == null,
+                    editTargetMessageId = messageEdit?.targetMessageId,
+                    currentBrowserMessageId = currentBrowserMessageId,
+                    hasEarlierMessages = hasEarlierMessages,
+                    messageStartIndex = messageStartIndex,
+                    historyLoadState = historyLoadState,
+                    onLoadEarlierMessages = onLoadEarlierMessages,
+                    onHistoryViewportChanged = onHistoryViewportChanged,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
         }
     }
 }
@@ -756,6 +770,8 @@ internal fun AgentConversationMessages(
 
     // 滚动层保持整屏，输入器作为后绘制浮层；输入器高度进入列表的
     // afterContentPadding，确保跟到底部时最后一行停在输入器上方。
+    val isCoui = LocalUiStyle.current == AppearanceUiStyle.COUI
+    val messagesBackdrop = if (isCoui || assistantOverlay) null else rememberGlassBackdrop()
     CompositionLocalProvider(LocalOnChatItemExpand provides onExpandItem) {
         Box(modifier = modifier.clipToBounds()) {
             LazyColumn(
@@ -763,6 +779,7 @@ internal fun AgentConversationMessages(
                 verticalArrangement = Arrangement.Top,
                 modifier = Modifier
                     .fillMaxSize()
+                    .captureGlassBackdrop(messagesBackdrop)
                     .scrollEndHaptic()
                     .nestedScroll(historyPaging.scrollConnection)
                     .overScrollVertical(),
@@ -856,11 +873,17 @@ internal fun AgentConversationMessages(
                 enter = fadeIn(tween(160)) + scaleIn(tween(180), initialScale = 0.82f),
                 exit = fadeOut(tween(100)) + scaleOut(tween(120), targetScale = 0.86f),
             ) {
-                val isCoui = LocalUiStyle.current == AppearanceUiStyle.COUI
-                val couiDark = CouiTheme.isDark
-                IconButton(
-                    modifier = if (isCoui) {
-                        Modifier
+                val scrollToBottom: () -> Unit = {
+                    suppressAutoReanchor = false
+                    onBottomAnchorChanged(true)
+                    coroutineScope.launch {
+                        scrollState.animateScrollToItem(bottomItemIndex)
+                    }
+                }
+                if (isCoui) {
+                    val couiDark = CouiTheme.isDark
+                    IconButton(
+                        modifier = Modifier
                             .dropShadow(
                                 shape = CircleShape,
                                 shadow = Shadow(
@@ -873,40 +896,32 @@ internal fun AgentConversationMessages(
                                 width = 0.5.dp,
                                 color = if (couiDark) Color(0x22FFFFFF) else Color(0x10000000),
                                 shape = CircleShape,
-                            )
-                    } else {
-                        Modifier
-                            .dropShadow(
-                                shape = CircleShape,
-                                shadow = Shadow(radius = 8.dp, color = Color.Black, alpha = 0.08f),
-                            )
-                            .squircleBorder(
-                                width = 0.5.dp,
-                                color = MiuixTheme.colorScheme.outline.copy(alpha = 0.55f),
-                                cornerRadius = IconButtonDefaults.CornerRadius,
-                            )
-                    },
-                    onClick = {
-                        suppressAutoReanchor = false
-                        onBottomAnchorChanged(true)
-                        coroutineScope.launch {
-                            scrollState.animateScrollToItem(bottomItemIndex)
-                        }
-                    },
-                    backgroundColor = if (isCoui) {
-                        if (couiDark) Color(0xFF24262B) else Color.White
-                    } else {
-                        MiuixTheme.colorScheme.surfaceContainerHigh
-                    },
-                    minWidth = 36.dp,
-                    minHeight = 36.dp,
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.ArrowDownward,
-                        contentDescription = stringResource(R.string.ui_back_to_bottom_32282e),
-                        modifier = Modifier.size(16.dp),
-                        tint = MiuixTheme.colorScheme.onSurface.copy(alpha = 0.78f),
-                    )
+                            ),
+                        onClick = scrollToBottom,
+                        backgroundColor = if (couiDark) Color(0xFF24262B) else Color.White,
+                        minWidth = 36.dp,
+                        minHeight = 36.dp,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.ArrowDownward,
+                            contentDescription = stringResource(R.string.ui_back_to_bottom_32282e),
+                            modifier = Modifier.size(16.dp),
+                            tint = MiuixTheme.colorScheme.onSurface.copy(alpha = 0.78f),
+                        )
+                    }
+                } else {
+                    GlassIconButton(
+                        onClick = scrollToBottom,
+                        backdrop = messagesBackdrop,
+                        size = 40.dp,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.ArrowDownward,
+                            contentDescription = stringResource(R.string.ui_back_to_bottom_32282e),
+                            modifier = Modifier.size(18.dp),
+                            tint = MiuixTheme.colorScheme.onSurface.copy(alpha = 0.85f),
+                        )
+                    }
                 }
             }
         }
@@ -1062,6 +1077,7 @@ private fun AgentChatBottomBar(
     inputSyncVersion: Int,
     focusInputOnSync: Boolean,
     messageEdit: MessageEditUiState?,
+    glassBackdrop: Backdrop?,
     onSubmit: (String) -> Unit,
     onInterruptAndSubmit: (String) -> Unit,
     onSteerQueuedMessage: (String) -> Unit,
@@ -1080,6 +1096,10 @@ private fun AgentChatBottomBar(
     onCancelMessageEdit: () -> Unit,
 ) {
     val surface = MiuixTheme.colorScheme.surface
+    val bottomBarInsets = rememberFloatingBottomBarInsets(
+        baseInsets = WindowInsets.navigationBars,
+        fixedBottomPadding = 10.dp,
+    )
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -1101,7 +1121,7 @@ private fun AgentChatBottomBar(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .navigationBarsPadding()
+                .windowInsetsPadding(bottomBarInsets)
                 .padding(top = 14.dp, start = 14.dp, end = 14.dp, bottom = 10.dp),
         ) {
             AgentChatInputBar(
@@ -1136,6 +1156,7 @@ private fun AgentChatBottomBar(
                 onAttachFilePath = onAttachFilePath,
                 onRemoveFileReference = onRemoveFileReference,
                 onCancelMessageEdit = onCancelMessageEdit,
+                glassBackdrop = glassBackdrop,
                 modifier = Modifier.fillMaxWidth(),
             )
         }
@@ -1311,9 +1332,14 @@ private fun SuggestionCard(
             .clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
     } else {
         Modifier
+            .glassPress(interactionSource)
             .squircleSurface(color = fill, cornerRadius = 15.dp)
             .squircleBorder(width = 0.5.dp, color = border, cornerRadius = 15.dp)
-            .clickable(onClick = onClick)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick,
+            )
     }
     Row(
         modifier = modifier

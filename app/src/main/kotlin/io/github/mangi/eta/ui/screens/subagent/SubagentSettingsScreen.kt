@@ -22,8 +22,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Extension
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -71,6 +69,7 @@ import io.github.mangi.eta.ui.components.EtaChoiceChip
 import io.github.mangi.eta.ui.components.ListEmptyState
 import io.github.mangi.eta.ui.components.MiuixDialogActions
 import io.github.mangi.eta.ui.components.MiuixScaffoldPage
+import io.github.mangi.eta.ui.components.MiuixTopBarActionButton
 import io.github.mangi.eta.ui.components.OptionalModelPickerContent
 import io.github.mangi.eta.ui.components.StatusError
 import io.github.mangi.eta.ui.components.coui.CouiButton
@@ -86,6 +85,8 @@ import io.github.mangi.eta.ui.components.coui.CouiSwitchPreference
 import io.github.mangi.eta.ui.components.coui.CouiTextField
 import io.github.mangi.eta.ui.components.coui.CouiTopAppBarIconButton
 import io.github.mangi.eta.ui.components.coui.rememberCouiDialogMaterial
+import io.github.mangi.eta.ui.components.currentGlassOverlayBackdrop
+import io.github.mangi.eta.ui.components.glassOverlayTextFieldColors
 import io.github.mangi.eta.ui.model.AgentModelOptionUi
 import io.github.mangi.eta.ui.model.AgentModelPickerProjector
 import io.github.mangi.eta.ui.model.filterGroups
@@ -94,20 +95,19 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.Icon
-import top.yukonga.miuix.kmp.basic.IconButton
-import top.yukonga.miuix.kmp.basic.InputField
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.basic.TextField
-import top.yukonga.miuix.kmp.overlay.OverlayBottomSheet
+import top.yukonga.miuix.kmp.glass.GlassBottomSheet
+import top.yukonga.miuix.kmp.glass.GlassDialog
+import top.yukonga.miuix.kmp.glass.GlassDropdownPreference
+import top.yukonga.miuix.kmp.icon.MiuixIcons
+import top.yukonga.miuix.kmp.icon.glass.Add
 import top.yukonga.miuix.kmp.preference.ArrowPreference
-import top.yukonga.miuix.kmp.preference.OverlayDropdownPreference
 import top.yukonga.miuix.kmp.preference.SwitchPreference
 import top.yukonga.miuix.kmp.squircle.squircleSurface
 import top.yukonga.miuix.kmp.theme.MiuixTheme
-import top.yukonga.miuix.kmp.window.WindowDialog
 
 private data class CustomSubagentDraft(
     val originalName: String? = null,
@@ -187,7 +187,11 @@ internal fun SubagentSettingsScreen(
 
     var showModelSheet by remember { mutableStateOf(false) }
     var inspectedProfile by remember { mutableStateOf<SubagentProfile?>(null) }
+    var retainedProfile by remember { mutableStateOf<SubagentProfile?>(null) }
+    if (inspectedProfile != null) retainedProfile = inspectedProfile
     var editorDraft by remember { mutableStateOf<CustomSubagentDraft?>(null) }
+    var retainedDraft by remember { mutableStateOf<CustomSubagentDraft?>(null) }
+    if (editorDraft != null) retainedDraft = editorDraft
     var editorError by remember { mutableStateOf<String?>(null) }
 
     val onToggleSubagent: (Boolean) -> Unit = { checked ->
@@ -473,21 +477,20 @@ internal fun SubagentSettingsScreen(
                 title = "Subagent",
                 onBack = onBack,
                 actions = {
-                    IconButton(
+                    MiuixTopBarActionButton(
+                        icon = MiuixIcons.Glass.Add,
+                        contentDescription = "新建 Subagent",
                         onClick = {
                             editorError = null
                             editorDraft = CustomSubagentDraft()
                         },
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.Add,
-                            contentDescription = "新建 Subagent",
-                        )
-                    }
+                    )
                 },
                 overlay = {
-                    OverlayBottomSheet(
+                    val overlayBackdrop = currentGlassOverlayBackdrop()
+                    GlassBottomSheet(
                         show = showModelSheet,
+                        backdrop = overlayBackdrop,
                         title = "Subagent 模型",
                         onDismissRequest = { showModelSheet = false },
                         insideMargin = DpSize(0.dp, 0.dp),
@@ -508,11 +511,13 @@ internal fun SubagentSettingsScreen(
                         )
                     }
 
-                    val currentProfile = inspectedProfile
-                    OverlayBottomSheet(
-                        show = currentProfile != null,
+                    val currentProfile = inspectedProfile ?: retainedProfile
+                    GlassBottomSheet(
+                        show = inspectedProfile != null,
+                        backdrop = overlayBackdrop,
                         title = currentProfile?.name.orEmpty(),
                         onDismissRequest = { inspectedProfile = null },
+                        onDismissFinished = { if (inspectedProfile == null) retainedProfile = null },
                     ) {
                         if (currentProfile != null) {
                             SubagentProfileDetailContent(
@@ -554,11 +559,13 @@ internal fun SubagentSettingsScreen(
                         }
                     }
 
-                    val activeDraft = editorDraft
-                    WindowDialog(
-                        show = activeDraft != null,
+                    val activeDraft = editorDraft ?: retainedDraft
+                    GlassDialog(
+                        show = editorDraft != null,
+                        backdrop = overlayBackdrop,
                         title = if (activeDraft?.originalName != null) "编辑 Subagent" else "新建 Subagent",
                         onDismissRequest = { editorDraft = null },
+                        onDismissFinished = { if (editorDraft == null) retainedDraft = null },
                     ) {
                         if (activeDraft != null) {
                             Column(modifier = Modifier.fillMaxWidth().heightIn(max = 540.dp)) {
@@ -573,6 +580,7 @@ internal fun SubagentSettingsScreen(
                                         value = activeDraft.name,
                                         onValueChange = { editorDraft = activeDraft.copy(name = it) },
                                         label = "名称 (kebab-case，如 bill-analyzer)",
+                                        colors = glassOverlayTextFieldColors(),
                                         singleLine = true,
                                         modifier = Modifier.fillMaxWidth(),
                                     )
@@ -580,6 +588,7 @@ internal fun SubagentSettingsScreen(
                                         value = activeDraft.description,
                                         onValueChange = { editorDraft = activeDraft.copy(description = it) },
                                         label = "简介 (Description)",
+                                        colors = glassOverlayTextFieldColors(),
                                         singleLine = true,
                                         modifier = Modifier.fillMaxWidth(),
                                     )
@@ -587,6 +596,7 @@ internal fun SubagentSettingsScreen(
                                         value = activeDraft.toolsText,
                                         onValueChange = { editorDraft = activeDraft.copy(toolsText = it) },
                                         label = "可用工具 (逗号分隔，留空默认允许全部非 GUI 工具)",
+                                        colors = glassOverlayTextFieldColors(),
                                         singleLine = true,
                                         modifier = Modifier.fillMaxWidth(),
                                     )
@@ -594,6 +604,7 @@ internal fun SubagentSettingsScreen(
                                         value = activeDraft.prompt,
                                         onValueChange = { editorDraft = activeDraft.copy(prompt = it) },
                                         label = "角色指令 (System Prompt)",
+                                        colors = glassOverlayTextFieldColors(),
                                         minLines = 4,
                                         maxLines = 8,
                                         modifier = Modifier.fillMaxWidth(),
@@ -637,10 +648,11 @@ internal fun SubagentSettingsScreen(
                             onClick = { showModelSheet = true },
                         )
                         if (effortOptions.size > 1) {
-                            OverlayDropdownPreference(
+                            GlassDropdownPreference(
                                 title = "思考强度",
                                 items = effortLabels,
                                 selectedIndex = selectedEffortIndex,
+                                backdrop = currentGlassOverlayBackdrop(),
                                 enabled = subagentEnabled,
                                 onSelectedIndexChange = onEffortChange,
                             )

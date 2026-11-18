@@ -4,7 +4,10 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.database.ContentObserver
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import android.widget.Toast
 import androidx.compose.foundation.layout.Box
@@ -22,34 +25,26 @@ import androidx.compose.material.icons.rounded.Cloud
 import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.Dashboard
 import androidx.compose.material.icons.rounded.Description
-import androidx.compose.material.icons.rounded.GppMaybe
-import androidx.compose.material.icons.rounded.Hearing
 import androidx.compose.material.icons.rounded.Hub
 import androidx.compose.material.icons.rounded.ImportContacts
 import androidx.compose.material.icons.rounded.Info
-import androidx.compose.material.icons.rounded.Inventory
 import androidx.compose.material.icons.rounded.Inventory2
 import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.Layers
-import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.PowerSettingsNew
 import androidx.compose.material.icons.rounded.Psychology
 import androidx.compose.material.icons.rounded.Security
 import androidx.compose.material.icons.rounded.Settings
-import androidx.compose.material.icons.rounded.SettingsVoice
-import androidx.compose.material.icons.rounded.Smartphone
 import androidx.compose.material.icons.rounded.SportsBar
 import androidx.compose.material.icons.rounded.SupportAgent
 import androidx.compose.material.icons.rounded.SwipeUp
 import androidx.compose.material.icons.rounded.SystemUpdate
-import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material.icons.rounded.TouchApp
 import androidx.compose.material.icons.rounded.TravelExplore
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.VerifiedUser
-import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
@@ -76,8 +71,12 @@ import io.github.mangi.eta.EtaApp
 import io.github.mangi.eta.R
 import io.github.mangi.eta.agent.accessibility.AccessibilityProtectionClient
 import io.github.mangi.eta.agent.accessibility.AgentAccessibilityService
+import io.github.mangi.eta.agent.voice.AssistantRoleHelper
+import io.github.mangi.eta.agent.voice.AssistantRoleStatus
+import io.github.mangi.eta.agent.voice.DefaultAssistantOwner
 import io.github.mangi.eta.config.PowerAssistantTarget
 import io.github.mangi.eta.config.Prefs
+import io.github.mangi.eta.core.ModuleConfig
 import io.github.mangi.eta.data.model.AppearanceUiStyle
 import io.github.mangi.eta.data.model.ReasoningEffort
 import io.github.mangi.eta.data.model.enabledModel
@@ -85,9 +84,6 @@ import io.github.mangi.eta.data.repository.ProviderRepository
 import io.github.mangi.eta.data.repository.RuntimeConfigRepository
 import io.github.mangi.eta.data.update.AppLatestRelease
 import io.github.mangi.eta.data.update.AppUpdateChecker
-import io.github.mangi.eta.systemizer.GoogleAppSystemizerInstaller
-import io.github.mangi.eta.systemizer.RootManager
-import io.github.mangi.eta.systemizer.SystemizerInstallResult
 import io.github.mangi.eta.ui.app.EnhancementSettingsHistory
 import io.github.mangi.eta.ui.app.LocalUiStyle
 import io.github.mangi.eta.ui.app.rememberDeviceCapabilities
@@ -104,9 +100,12 @@ import io.github.mangi.eta.ui.components.coui.CouiPreference
 import io.github.mangi.eta.ui.components.coui.CouiScaffoldPage
 import io.github.mangi.eta.ui.components.coui.CouiSettingsIcon
 import io.github.mangi.eta.ui.components.coui.CouiSwitchPreference
+import io.github.mangi.eta.ui.components.currentGlassOverlayBackdrop
 import io.github.mangi.eta.ui.model.AgentModelPickerProjector
 import io.github.mangi.eta.ui.navigation.AppRoute
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import top.yukonga.miuix.kmp.basic.BasicComponent
@@ -114,11 +113,11 @@ import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.glass.GlassDialog
+import top.yukonga.miuix.kmp.glass.GlassDropdownPreference
 import top.yukonga.miuix.kmp.preference.ArrowPreference
-import top.yukonga.miuix.kmp.preference.OverlayDropdownPreference
 import top.yukonga.miuix.kmp.preference.SwitchPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
-import top.yukonga.miuix.kmp.window.WindowDialog
 
 private object SettingsIconColors {
     val Blue = Color(0xFF4285F4)
@@ -191,9 +190,6 @@ private fun SettingsPageContent(
     val capabilities = rememberDeviceCapabilities()
     val enhancementHistory = remember(context.applicationContext) { EnhancementSettingsHistory(context) }
     var hasConnectedFramework by remember { mutableStateOf(enhancementHistory.hasConnected) }
-    var hasUsedSystemizer by remember { mutableStateOf(enhancementHistory.hasUsedSystemizer) }
-    var showSystemizerDialog by remember { mutableStateOf(false) }
-    var installingSystemizer by remember { mutableStateOf(false) }
 
     // 悬浮窗权限状态：授权后从系统设置返回时（ON_RESUME）刷新。
     var overlayGranted by remember {
@@ -206,14 +202,6 @@ private fun SettingsPageContent(
         mutableStateOf(AccessibilityProtectionClient.isEnabled(context))
     }
     var accessibilityProtectionPending by remember { mutableStateOf(false) }
-    val openAssistantSettings: () -> Unit = {
-        val failed = runCatching {
-            context.startActivity(Intent(Settings.ACTION_VOICE_INPUT_SETTINGS))
-        }.isFailure
-        if (failed) {
-            Toast.makeText(context, context.getString(R.string.settings_open_assistant_failed), Toast.LENGTH_SHORT).show()
-        }
-    }
 
     // 关于组：版本信息与更新检查。结果对话框在列表外渲染，状态需要页面级 owner。
     val appPackageInfo = remember {
@@ -226,6 +214,8 @@ private fun SettingsPageContent(
     }
     var checkingUpdate by remember { mutableStateOf(false) }
     var availableUpdate by remember { mutableStateOf<AppLatestRelease?>(null) }
+    var retainedUpdate by remember { mutableStateOf<AppLatestRelease?>(null) }
+    if (availableUpdate != null) retainedUpdate = availableUpdate
     val checkForUpdate: () -> Unit = {
         if (!checkingUpdate) {
             checkingUpdate = true
@@ -249,19 +239,6 @@ private fun SettingsPageContent(
                 }
             }
         }
-    }
-    val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
-                overlayGranted = android.provider.Settings.canDrawOverlays(context)
-                accessibilityGranted = isAgentAccessibilityEnabled(context)
-                accessibilityProtectionEnabled =
-                    AccessibilityProtectionClient.isEnabled(context)
-            }
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     // Provider / Model 选中状态展示
@@ -362,13 +339,110 @@ private fun SettingsPageContent(
     var powerAssistantTarget by remember(prefs) {
         mutableStateOf(prefs?.let(Prefs::powerAssistantTarget) ?: enhancementHistory.powerTarget())
     }
+    var assistantRoleStatus by remember(context) {
+        mutableStateOf(AssistantRoleHelper.queryStatus(context))
+    }
+    var assistantRefreshJob by remember { mutableStateOf<Job?>(null) }
+    val scheduleAssistantRoleRefresh: () -> Unit = {
+        assistantRoleStatus = AssistantRoleHelper.queryStatus(context)
+        assistantRefreshJob?.cancel()
+        assistantRefreshJob = coroutineScope.launch {
+            delay(450L)
+            assistantRoleStatus = AssistantRoleHelper.queryStatus(context)
+        }
+    }
+    DisposableEffect(context) {
+        val resolver = context.contentResolver
+        val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {
+            override fun onChange(selfChange: Boolean) {
+                scheduleAssistantRoleRefresh()
+            }
+        }
+        runCatching {
+            resolver.registerContentObserver(
+                Settings.Secure.getUriFor(ModuleConfig.SECURE_ASSISTANT),
+                false,
+                observer,
+            )
+            resolver.registerContentObserver(
+                Settings.Secure.getUriFor(ModuleConfig.SECURE_VOICE_INTERACTION_SERVICE),
+                false,
+                observer,
+            )
+        }
+        onDispose {
+            assistantRefreshJob?.cancel()
+            runCatching { resolver.unregisterContentObserver(observer) }
+        }
+    }
+    val syncPowerTargetAfterManualAssistantChange: (AssistantRoleStatus) -> Unit = { updated ->
+        val targetPrefs = prefs
+        val autoConfigDefault = Prefs.Keys.BOOLEAN_DEFAULTS.getValue(Prefs.Keys.ASSISTANT_AUTO_CONFIG)
+        if (targetPrefs != null &&
+            targetPrefs.getBoolean(Prefs.Keys.ASSISTANT_AUTO_CONFIG, autoConfigDefault)
+        ) {
+            val mappedTarget = when (updated.owner) {
+                DefaultAssistantOwner.ETA -> PowerAssistantTarget.ETA
+                DefaultAssistantOwner.GEMINI -> PowerAssistantTarget.GEMINI
+                DefaultAssistantOwner.OTHER,
+                DefaultAssistantOwner.NONE -> PowerAssistantTarget.OEM
+            }
+            if (powerAssistantTarget != mappedTarget &&
+                putStringSync(
+                    prefs = targetPrefs,
+                    key = Prefs.Keys.POWER_KEY_ASSISTANT_TARGET,
+                    value = mappedTarget.persistedValue,
+                )
+            ) {
+                powerAssistantTarget = mappedTarget
+                enhancementHistory.recordCommittedTarget(mappedTarget)
+            }
+        }
+    }
+    var ownerBeforeAssistantSettings by remember { mutableStateOf<DefaultAssistantOwner?>(null) }
+    val openAssistantSettings: () -> Unit = {
+        val currentStatus = AssistantRoleHelper.queryStatus(context)
+        assistantRoleStatus = currentStatus
+        if (AssistantRoleHelper.openSystemSettings(context)) {
+            ownerBeforeAssistantSettings = currentStatus.owner
+        } else {
+            Toast.makeText(context, context.getString(R.string.settings_open_assistant_failed), Toast.LENGTH_SHORT).show()
+        }
+    }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                overlayGranted = android.provider.Settings.canDrawOverlays(context)
+                accessibilityGranted = isAgentAccessibilityEnabled(context)
+                accessibilityProtectionEnabled =
+                    AccessibilityProtectionClient.isEnabled(context)
+                val updated = AssistantRoleHelper.queryStatus(context)
+                assistantRoleStatus = updated
+                val previousOwner = ownerBeforeAssistantSettings
+                if (previousOwner != null) {
+                    ownerBeforeAssistantSettings = null
+                    if (updated.owner != previousOwner) {
+                        syncPowerTargetAfterManualAssistantChange(updated)
+                    }
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     DisposableEffect(prefs) {
         val targetPrefs = prefs ?: return@DisposableEffect onDispose {}
         val listener = SharedPreferences.OnSharedPreferenceChangeListener { changedPrefs, key ->
-            if (key == Prefs.Keys.POWER_KEY_ASSISTANT_TARGET ||
-                key == Prefs.Keys.POWER_KEY_TAKEOVER
-            ) {
-                powerAssistantTarget = Prefs.powerAssistantTarget(changedPrefs)
+            when (key) {
+                Prefs.Keys.POWER_KEY_ASSISTANT_TARGET,
+                Prefs.Keys.POWER_KEY_TAKEOVER -> {
+                    powerAssistantTarget = Prefs.powerAssistantTarget(changedPrefs)
+                    scheduleAssistantRoleRefresh()
+                }
+                Prefs.Keys.ASSISTANT_AUTO_CONFIG -> {
+                    scheduleAssistantRoleRefresh()
+                }
             }
         }
         targetPrefs.registerOnSharedPreferenceChangeListener(listener)
@@ -407,6 +481,7 @@ private fun SettingsPageContent(
             ) {
                 powerAssistantTarget = target
                 enhancementHistory.recordCommittedTarget(target)
+                scheduleAssistantRoleRefresh()
             } else {
                 Toast.makeText(
                     context.applicationContext,
@@ -618,6 +693,12 @@ private fun SettingsPageContent(
                 Group(title = stringResource(R.string.ui_system_assistant_takes_over_f46043)) {
                     CouiPreference(
                         title = stringResource(R.string.ui_eta_system_assistant_003e9b),
+                        value = assistantRoleStatus.displayValue(),
+                        valueColor = if (assistantRoleStatus.isDefaultAssistant) {
+                            StatusSuccess
+                        } else {
+                            pageColors.summary
+                        },
                         icon = {
                             CouiSettingsIcon(
                                 Icons.Rounded.SupportAgent,
@@ -662,64 +743,6 @@ private fun SettingsPageContent(
                             icon = Icons.Rounded.Settings,
                             iconTint = SettingsIconColors.Green,
                         )
-                    }
-                }
-
-                if (prefs != null || hasConnectedFramework || capabilities.root.isGranted || hasUsedSystemizer) {
-                    Group(title = "Gemini") {
-                        val hasFrameworkRows = prefs != null || hasConnectedFramework
-                        if (hasFrameworkRows) {
-                            SwitchPref(
-                                context = context,
-                                prefs = prefs,
-                                title = stringResource(R.string.ui_maintain_hey_google_detection_after_screen_rest_9d6877),
-                                key = Prefs.Keys.HOTWORD_SELF_HEAL,
-                                icon = Icons.Rounded.Hearing,
-                                iconTint = SettingsIconColors.Green,
-                            )
-                            CouiIconDivider()
-                            SwitchPref(
-                                context = context,
-                                prefs = prefs,
-                                title = stringResource(R.string.ui_lock_screen_evokes_automatic_voice_input_1cde18),
-                                key = Prefs.Keys.LOCKSCREEN_VOICE_COMMAND,
-                                icon = Icons.Rounded.Lock,
-                                iconTint = SettingsIconColors.Blue,
-                            )
-                            CouiIconDivider()
-                            SwitchPref(
-                                context = context,
-                                prefs = prefs,
-                                title = stringResource(R.string.ui_bright_screen_evokes_automatic_voice_input_4358fe),
-                                key = Prefs.Keys.SCREEN_ON_VOICE_COMMAND,
-                                icon = Icons.Rounded.SettingsVoice,
-                                iconTint = SettingsIconColors.Green,
-                            )
-                        }
-                        if (capabilities.root.isGranted || hasUsedSystemizer) {
-                            if (hasFrameworkRows) {
-                                CouiIconDivider()
-                            }
-                            CouiPreference(
-                                title = stringResource(R.string.ui_convert_google_apps_to_system_apps_0f6d89),
-                                summary = if (capabilities.root.isGranted) null else stringResource(R.string.capability_root_required),
-                                icon = {
-                                    CouiSettingsIcon(
-                                        icon = Icons.Rounded.Inventory,
-                                        tint = SettingsIconColors.Orange,
-                                        enabled = !installingSystemizer,
-                                    )
-                                },
-                                enabled = !installingSystemizer,
-                                onClick = {
-                                    if (!capabilities.root.isGranted) {
-                                        onNavigate(AppRoute.SystemEnhance)
-                                    } else if (!installingSystemizer) {
-                                        showSystemizerDialog = true
-                                    }
-                                },
-                            )
-                        }
                     }
                 }
 
@@ -898,6 +921,30 @@ private fun SettingsPageContent(
             MiuixScaffoldPage(
                 title = stringResource(R.string.ui_set_up_7debf9),
                 onBack = onBack,
+                overlay = {
+                    val activeUpdate = availableUpdate ?: retainedUpdate
+                    GlassDialog(
+                        show = availableUpdate != null,
+                        backdrop = currentGlassOverlayBackdrop(),
+                        title = stringResource(R.string.ui_update_available_title),
+                        summary = activeUpdate?.let { update ->
+                            stringResource(R.string.ui_update_available_message, update.version, appVersionName)
+                        },
+                        onDismissRequest = { availableUpdate = null },
+                        onDismissFinished = { if (availableUpdate == null) retainedUpdate = null },
+                    ) {
+                        MiuixDialogActions(
+                            confirmText = stringResource(R.string.ui_update_go_download),
+                            confirmEnabled = activeUpdate != null,
+                            onCancel = { availableUpdate = null },
+                            onConfirm = {
+                                val target = activeUpdate
+                                availableUpdate = null
+                                if (target != null) openUrl(target.url)
+                            },
+                        )
+                    }
+                },
             ) {
                 item(key = "section_agent") {
                     SmallTitle(stringResource(R.string.settings_llm_providers))
@@ -916,10 +963,11 @@ private fun SettingsPageContent(
                             icon = Icons.Rounded.Psychology,
                         )
                         if (effortOptions.size > 1) {
-                            OverlayDropdownPreference(
+                            GlassDropdownPreference(
                                 title = defaultEffortTitle,
                                 items = effortLabels,
                                 selectedIndex = selectedEffortIndex,
+                                backdrop = currentGlassOverlayBackdrop(),
                                 enabled = defaultEffortEnabled,
                                 onSelectedIndexChange = onDefaultEffortSelect,
                                 startAction = {
@@ -1032,6 +1080,17 @@ private fun SettingsPageContent(
                         ArrowPreference(
                             title = stringResource(R.string.ui_eta_system_assistant_003e9b),
                             startAction = { SettingsIcon(Icons.Rounded.SupportAgent) },
+                            endActions = {
+                                Text(
+                                    text = assistantRoleStatus.displayValue(),
+                                    fontSize = MiuixTheme.textStyles.body2.fontSize,
+                                    color = if (assistantRoleStatus.isDefaultAssistant) {
+                                        StatusSuccess
+                                    } else {
+                                        MiuixTheme.colorScheme.onSurfaceVariantActions
+                                    },
+                                )
+                            },
                             onClick = openAssistantSettings,
                         )
                         ArrowPreference(
@@ -1040,10 +1099,11 @@ private fun SettingsPageContent(
                             onClick = { onNavigate(AppRoute.AssistantOverlaySettings) },
                         )
                         if (prefs != null || hasConnectedFramework) {
-                            OverlayDropdownPreference(
+                            GlassDropdownPreference(
                                 title = stringResource(R.string.ui_long_press_the_power_button_1958d0),
                                 items = powerAssistantItems,
                                 selectedIndex = powerAssistantTargets.indexOf(powerAssistantTarget),
+                                backdrop = currentGlassOverlayBackdrop(),
                                 onSelectedIndexChange = onPowerTargetSelect,
                                 startAction = {
                                     SettingsIcon(
@@ -1060,58 +1120,6 @@ private fun SettingsPageContent(
                                 key = Prefs.Keys.ASSISTANT_AUTO_CONFIG,
                                 icon = Icons.Rounded.Settings,
                             )
-                        }
-                    }
-                }
-
-                if (prefs != null || hasConnectedFramework || capabilities.root.isGranted || hasUsedSystemizer) {
-                    item(key = "section_gemini") {
-                        SmallTitle("Gemini")
-                        SettingsGroupCard {
-                            if (prefs != null || hasConnectedFramework) {
-                                SwitchPref(
-                                    context = context,
-                                    prefs = prefs,
-                                    title = stringResource(R.string.ui_maintain_hey_google_detection_after_screen_rest_9d6877),
-                                    key = Prefs.Keys.HOTWORD_SELF_HEAL,
-                                    icon = Icons.Rounded.Hearing,
-                                )
-                                SwitchPref(
-                                    context = context,
-                                    prefs = prefs,
-                                    title = stringResource(R.string.ui_lock_screen_evokes_automatic_voice_input_1cde18),
-                                    key = Prefs.Keys.LOCKSCREEN_VOICE_COMMAND,
-                                    icon = Icons.Rounded.Lock,
-                                )
-                                SwitchPref(
-                                    context = context,
-                                    prefs = prefs,
-                                    title = stringResource(R.string.ui_bright_screen_evokes_automatic_voice_input_4358fe),
-                                    key = Prefs.Keys.SCREEN_ON_VOICE_COMMAND,
-                                    icon = Icons.Rounded.SettingsVoice,
-                                )
-                            }
-                            if (capabilities.root.isGranted || hasUsedSystemizer) {
-                                ArrowPreference(
-                                    title = stringResource(R.string.ui_convert_google_apps_to_system_apps_0f6d89),
-                                    startAction = {
-                                        SettingsIcon(
-                                            icon = Icons.Rounded.Inventory,
-                                            enabled = !installingSystemizer,
-                                        )
-                                    },
-                                    summary = if (capabilities.root.isGranted) null else stringResource(R.string.capability_root_required),
-                                    enabled = !installingSystemizer,
-                                    holdDownState = showSystemizerDialog,
-                                    onClick = {
-                                        if (!capabilities.root.isGranted) {
-                                            onNavigate(AppRoute.SystemEnhance)
-                                        } else if (!installingSystemizer) {
-                                            showSystemizerDialog = true
-                                        }
-                                    },
-                                )
-                            }
                         }
                     }
                 }
@@ -1284,117 +1292,29 @@ private fun SettingsPageContent(
         }
     }
 
-    SystemizerConfirmDialog(
-        show = showSystemizerDialog,
-        installing = installingSystemizer,
-        onDismissRequest = {
-            if (!installingSystemizer) {
-                showSystemizerDialog = false
-            }
-        },
-        onConfirm = {
-            if (installingSystemizer) return@SystemizerConfirmDialog
-            if (!capabilities.root.isGranted) {
-                showSystemizerDialog = false
-                onNavigate(AppRoute.SystemEnhance)
-                return@SystemizerConfirmDialog
-            }
-            enhancementHistory.recordSystemizerUse()
-            hasUsedSystemizer = true
-            showSystemizerDialog = false
-            installingSystemizer = true
-            coroutineScope.launch {
-                val result = withContext(Dispatchers.IO) {
-                    GoogleAppSystemizerInstaller(context.applicationContext).install()
-                }
-                installingSystemizer = false
-                Toast.makeText(
-                    context.applicationContext,
-                    result.toToastMessage(context),
-                    Toast.LENGTH_LONG,
-                ).show()
-            }
-        },
-    )
-
-    availableUpdate?.let { update ->
-        when (LocalUiStyle.current) {
-            AppearanceUiStyle.COUI -> {
-                CouiConfirmDialog(
-                    visible = true,
-                    title = stringResource(R.string.ui_update_available_title),
-                    message = stringResource(R.string.ui_update_available_message, update.version, appVersionName),
-                    confirmText = stringResource(R.string.ui_update_go_download),
-                    onConfirm = {
-                        availableUpdate = null
-                        openUrl(update.url)
-                    },
-                    onDismissRequest = { availableUpdate = null },
-                )
-            }
-            AppearanceUiStyle.MIUIX -> {
-                WindowDialog(
-                    show = true,
-                    title = stringResource(R.string.ui_update_available_title),
-                    summary = stringResource(R.string.ui_update_available_message, update.version, appVersionName),
-                    onDismissRequest = { availableUpdate = null },
-                ) {
-                    MiuixDialogActions(
-                        confirmText = stringResource(R.string.ui_update_go_download),
-                        onCancel = { availableUpdate = null },
-                        onConfirm = {
-                            availableUpdate = null
-                            openUrl(update.url)
-                        },
-                    )
-                }
-            }
+    if (LocalUiStyle.current == AppearanceUiStyle.COUI) {
+        availableUpdate?.let { update ->
+            CouiConfirmDialog(
+                visible = true,
+                title = stringResource(R.string.ui_update_available_title),
+                message = stringResource(R.string.ui_update_available_message, update.version, appVersionName),
+                confirmText = stringResource(R.string.ui_update_go_download),
+                onConfirm = {
+                    availableUpdate = null
+                    openUrl(update.url)
+                },
+                onDismissRequest = { availableUpdate = null },
+            )
         }
     }
 }
 
 @Composable
-private fun SystemizerConfirmDialog(
-    show: Boolean,
-    installing: Boolean,
-    onDismissRequest: () -> Unit,
-    onConfirm: () -> Unit,
-) {
-    val confirmText = if (installing) {
-        stringResource(R.string.status_processing)
-    } else {
-        stringResource(R.string.action_confirm)
-    }
-    when (LocalUiStyle.current) {
-        AppearanceUiStyle.COUI -> {
-            CouiConfirmDialog(
-                visible = show,
-                title = stringResource(R.string.ui_convert_google_apps_to_system_apps_0f6d89),
-                message = stringResource(R.string.ui_system_applications_have_voice_wake_up_permissions_f_0190f2),
-                confirmText = confirmText,
-                confirmEnabled = !installing,
-                cancelEnabled = !installing,
-                onConfirm = onConfirm,
-                onDismissRequest = onDismissRequest,
-            )
-        }
-        AppearanceUiStyle.MIUIX -> {
-            WindowDialog(
-                show = show,
-                title = stringResource(R.string.ui_convert_google_apps_to_system_apps_0f6d89),
-                summary = stringResource(R.string.ui_system_applications_have_voice_wake_up_permissions_f_0190f2),
-                onDismissRequest = onDismissRequest,
-            ) {
-                MiuixDialogActions(
-                    confirmText = confirmText,
-                    cancelEnabled = !installing,
-                    confirmEnabled = !installing,
-                    onCancel = onDismissRequest,
-                    onConfirm = onConfirm,
-                )
-            }
-        }
-    }
+private fun AssistantRoleStatus.displayValue(): String = when (owner) {
+    DefaultAssistantOwner.ETA -> "Eta"
+    DefaultAssistantOwner.GEMINI -> "Gemini"
+    DefaultAssistantOwner.OTHER -> ownerLabel ?: stringResource(R.string.assistant_role_status_other)
+    DefaultAssistantOwner.NONE -> stringResource(R.string.assistant_role_status_unset)
 }
 
 @Composable
@@ -1500,23 +1420,3 @@ private fun isAgentAccessibilityEnabled(context: Context): Boolean {
     ).orEmpty()
     return enabledServices.split(':').any { it.equals(expected, ignoreCase = true) }
 }
-
-private fun SystemizerInstallResult.toToastMessage(context: Context): String =
-    when (this) {
-        SystemizerInstallResult.AlreadySystemized -> context.getString(R.string.systemizer_already_system)
-        SystemizerInstallResult.GoogleAppMissing -> context.getString(R.string.systemizer_google_missing)
-        SystemizerInstallResult.UnsupportedRootManager -> context.getString(R.string.systemizer_root_manager_missing)
-        SystemizerInstallResult.KernelSuMetamoduleMissing -> context.getString(R.string.systemizer_metamodule_missing)
-        is SystemizerInstallResult.RootPermissionUnavailable -> when (rootManager) {
-            RootManager.KERNEL_SU -> context.getString(R.string.systemizer_grant_kernelsu)
-            RootManager.MAGISK -> context.getString(R.string.systemizer_grant_magisk)
-            RootManager.UNSUPPORTED -> context.getString(R.string.systemizer_root_denied)
-        }
-        is SystemizerInstallResult.InstalledRebootRequired -> context.getString(R.string.systemizer_installed)
-        is SystemizerInstallResult.Failed -> commandOutput
-            .lineSequence()
-            .map { it.trim() }
-            .lastOrNull { it.isNotEmpty() }
-            ?.let { "$message：$it" }
-            ?: message
-    }

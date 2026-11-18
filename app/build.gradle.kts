@@ -31,7 +31,11 @@ val buildMetadataSuffix = buildMetadata?.let { "+$it" }.orEmpty()
 
 android {
     namespace = "io.github.mangi.eta"
-    compileSdk = 37
+    compileSdk {
+        version = release(37) {
+            minorApiLevel = 2
+        }
+    }
     ndkVersion = libs.versions.ndk.get()
 
     defaultConfig {
@@ -161,6 +165,9 @@ dependencies {
     implementation(libs.coui.icons)
     implementation(libs.miuix.ui)
     implementation(libs.miuix.blur)
+    implementation(libs.miuix.glass)
+    implementation(libs.miuix.glass.icons)
+    implementation(libs.miuix.material)
     implementation(libs.miuix.nav)
     implementation(libs.miuix.preference)
     implementation(libs.material.icons.extended)
@@ -170,6 +177,7 @@ dependencies {
     implementation(libs.activity.compose)
     // 只使用 GFM 解析器；聊天渲染层由 ui/markdown 自建，按块冻结并接入逐字显现。
     implementation(libs.intellij.markdown)
+    implementation(libs.ratex.android)
     implementation(libs.hidden.api.bypass)
 
     // DataStore：Provider / Model 结构化 JSON 与当前选中 ID 等键值
